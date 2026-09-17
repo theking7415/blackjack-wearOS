@@ -5,7 +5,9 @@ CLAUDE.md
 /.idea
 .DS_Store
 /build
+/app/build
 /captures
 .externalNativeBuild
 .cxx
 local.properties
+gradle/wrapper/*.zip

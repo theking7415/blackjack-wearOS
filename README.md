@@ -4,9 +4,9 @@ Kotlin + Jetpack Compose for Wear OS. Targets Pixel Watch 5 (Wear OS 6, 480x480 
 
 ## Status
 
-**Quick Play is functional**: standard casino rules (4-deck shoe, dealer stands on soft 17,
+**Quick Play is functional**: standard casino rules (4-deck shoe, dealer hits on soft 17,
 blackjack pays 3:2), bet/hit/stand loop, bankroll tracking. No persistence yet — bankroll
-resets on app restart.
+resets on app restart. Play-tested on a physical Pixel Watch 5.
 
 **Story mode is not started.** Per the top-level CLAUDE.md, several design questions need
 answers before implementation: table tiers/buy-ins, loan shark mechanics, save file format,
@@ -20,14 +20,7 @@ character/dialogue system. Tackle these as a separate pass.
 
 ## Building & running
 
-This project has no Gradle wrapper jar checked in yet (binary file). Open the folder in
-Android Studio (Koala+ recommended) and it will offer to generate the wrapper, or run:
-
-```
-gradle wrapper --gradle-version 8.7
-```
-
-if you have a system Gradle install. Then:
+To build or deploy, open the project folder in Android Studio and trigger a standard Gradle Sync, or run:
 
 ```
 ./gradlew installDebug
