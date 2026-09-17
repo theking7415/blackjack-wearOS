@@ -8,6 +8,8 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,6 +32,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.material.Button
 import androidx.wear.compose.material.MaterialTheme
+import androidx.wear.compose.material.SwipeToDismissBox
 import androidx.wear.compose.material.Text
 import com.sensinglocal.blackjack.game.BlackjackState
 import com.sensinglocal.blackjack.game.RoundPhase
@@ -39,6 +42,8 @@ import kotlin.random.Random
 
 private val SplashRed = Color(0xFF5C0000)
 
+private enum class AppScreen { SPLASH, MENU, GAME }
+
 class MainActivity : ComponentActivity() {
     private val viewModel: BlackjackViewModel by viewModels()
 
@@ -46,17 +51,33 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme {
-                var showSplash by remember { mutableStateOf(true) }
+                var screen by remember { mutableStateOf(AppScreen.SPLASH) }
                 Box(modifier = Modifier.fillMaxSize()) {
-                    BlackjackScreen(
-                        state = viewModel.state,
-                        onBet = viewModel::placeBet,
-                        onHit = viewModel::hit,
-                        onStand = viewModel::stand,
-                        onNextRound = viewModel::nextRound
-                    )
-                    if (showSplash) {
-                        SplashScreen(onFinished = { showSplash = false })
+                    when (screen) {
+                        // The menu is composed (and its icon/title bitmaps baked) underneath
+                        // the splash from the very start, so it's already sitting there ready
+                        // to be revealed as the splash wipes away — no black gap while it
+                        // waits for the splash to finish before it even starts building.
+                        AppScreen.SPLASH, AppScreen.MENU ->
+                            MainMenuScreen(onPlay = { screen = AppScreen.GAME })
+                        AppScreen.GAME -> SwipeToDismissBox(
+                            onDismissed = { screen = AppScreen.MENU }
+                        ) { isBackground ->
+                            if (isBackground) {
+                                MainMenuScreen(onPlay = {})
+                            } else {
+                                BlackjackScreen(
+                                    state = viewModel.state,
+                                    onBet = viewModel::placeBet,
+                                    onHit = viewModel::hit,
+                                    onStand = viewModel::stand,
+                                    onNextRound = viewModel::nextRound
+                                )
+                            }
+                        }
+                    }
+                    if (screen == AppScreen.SPLASH) {
+                        SplashScreen(onFinished = { screen = AppScreen.MENU })
                     }
                 }
             }
@@ -86,6 +107,14 @@ private fun SplashScreen(onFinished: () -> Unit) {
     Canvas(
         modifier = Modifier
             .fillMaxSize()
+            // The menu now sits (and is clickable) underneath this splash overlay the whole
+            // time, so swallow touches here to stop the PLAY button being tapped through
+            // before the wipe animation has actually revealed it.
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {}
+            )
             .graphicsLayer(alpha = 0.99f)
     ) {
         val w = size.width
