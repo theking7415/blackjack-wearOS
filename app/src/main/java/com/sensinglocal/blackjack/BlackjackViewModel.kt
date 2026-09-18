@@ -42,6 +42,16 @@ class BlackjackViewModel(application: Application) : AndroidViewModel(applicatio
         syncState()
     }
 
+    fun doubleDown() {
+        engine.doubleDown()
+        syncState()
+    }
+
+    fun split() {
+        engine.split()
+        syncState()
+    }
+
     fun nextRound() {
         engine.startNextRound()
         syncState()

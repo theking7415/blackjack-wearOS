@@ -35,6 +35,7 @@ import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.SwipeToDismissBox
 import androidx.wear.compose.material.Text
 import com.sensinglocal.blackjack.game.BlackjackState
+import com.sensinglocal.blackjack.game.PlayerHand
 import com.sensinglocal.blackjack.game.RoundPhase
 import com.sensinglocal.blackjack.game.RoundResult
 import kotlinx.coroutines.delay
@@ -71,6 +72,8 @@ class MainActivity : ComponentActivity() {
                                     onBet = viewModel::placeBet,
                                     onHit = viewModel::hit,
                                     onStand = viewModel::stand,
+                                    onDoubleDown = viewModel::doubleDown,
+                                    onSplit = viewModel::split,
                                     onNextRound = viewModel::nextRound
                                 )
                             }
@@ -153,6 +156,8 @@ fun BlackjackScreen(
     onBet: (Int) -> Unit,
     onHit: () -> Unit,
     onStand: () -> Unit,
+    onDoubleDown: () -> Unit,
+    onSplit: () -> Unit,
     onNextRound: () -> Unit
 ) {
     Box(
@@ -168,26 +173,53 @@ fun BlackjackScreen(
         ) {
             Text("Bankroll: ₹${state.bankroll}")
 
-            HandRow(label = "Dealer", cards = state.dealerCards.joinToString(" ") { it.label }, total = state.dealerTotal, hideTotal = state.phase == RoundPhase.PLAYER_TURN)
+            DealerHandRow(state = state)
 
             when (state.phase) {
                 RoundPhase.BETTING -> BettingControls(bankroll = state.bankroll, onBet = onBet)
-                RoundPhase.PLAYER_TURN -> PlayerControls(onHit = onHit, onStand = onStand)
+                RoundPhase.PLAYER_TURN -> PlayerControls(
+                    state = state,
+                    onHit = onHit,
+                    onStand = onStand,
+                    onDoubleDown = onDoubleDown,
+                    onSplit = onSplit
+                )
                 RoundPhase.DEALER_TURN -> Text("Dealer playing…")
-                RoundPhase.ROUND_OVER -> ResultControls(result = state.result, onNextRound = onNextRound)
+                RoundPhase.ROUND_OVER -> ResultControls(hands = state.hands, onNextRound = onNextRound)
             }
 
-            HandRow(label = "You", cards = state.playerCards.joinToString(" ") { it.label }, total = state.playerTotal, hideTotal = false)
+            PlayerHandsColumn(state = state)
         }
     }
 }
 
 @Composable
-private fun HandRow(label: String, cards: String, total: Int, hideTotal: Boolean) {
+private fun DealerHandRow(state: BlackjackState) {
+    val cardsText = if (state.dealerHoleCardRevealed || state.dealerCards.isEmpty()) {
+        state.dealerCards.joinToString(" ") { it.label }
+    } else {
+        // Hole card stays face-down until the player's turn is over, as at a real table.
+        // Uses an emoji-range glyph ("🎴") rather than the Unicode Playing Cards block
+        // (e.g. "🂠"), which commonly lacks a font fallback on Android/Wear OS.
+        listOf(state.dealerCards.first().label, "🎴").joinToString(" ")
+    }
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("$label: $cards")
-        if (!hideTotal && cards.isNotEmpty()) {
-            Text("($total)")
+        Text("Dealer: $cardsText")
+        if (state.dealerHoleCardRevealed && state.dealerCards.isNotEmpty()) {
+            Text("(${state.dealerTotal})")
+        }
+    }
+}
+
+@Composable
+private fun PlayerHandsColumn(state: BlackjackState) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        state.hands.forEachIndexed { index, hand ->
+            val label = if (state.hands.size > 1) "Hand ${index + 1}" else "You"
+            val marker = if (state.phase == RoundPhase.PLAYER_TURN && state.hands.size > 1 &&
+                index == state.activeHandIndex
+            ) "▶ " else ""
+            Text("$marker$label: ${hand.cards.joinToString(" ") { it.label }} (${hand.total})")
         }
     }
 }
@@ -205,16 +237,34 @@ private fun BettingControls(bankroll: Int, onBet: (Int) -> Unit) {
 }
 
 @Composable
-private fun PlayerControls(onHit: () -> Unit, onStand: () -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(onClick = onHit) { Text("Hit") }
-        Button(onClick = onStand) { Text("Stand") }
+private fun PlayerControls(
+    state: BlackjackState,
+    onHit: () -> Unit,
+    onStand: () -> Unit,
+    onDoubleDown: () -> Unit,
+    onSplit: () -> Unit
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onHit) { Text("Hit") }
+            Button(onClick = onStand) { Text("Stand") }
+        }
+        if (state.canDoubleDown || state.canSplit) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (state.canDoubleDown) {
+                    Button(onClick = onDoubleDown) { Text("Double") }
+                }
+                if (state.canSplit) {
+                    Button(onClick = onSplit) { Text("Split") }
+                }
+            }
+        }
     }
 }
 
 @Composable
-private fun ResultControls(result: RoundResult?, onNextRound: () -> Unit) {
-    val message = when (result) {
+private fun ResultControls(hands: List<PlayerHand>, onNextRound: () -> Unit) {
+    fun messageFor(result: RoundResult?): String = when (result) {
         RoundResult.PLAYER_BLACKJACK -> "Blackjack! You win"
         RoundResult.PLAYER_WIN -> "You win"
         RoundResult.DEALER_BUST -> "Dealer busts — you win"
@@ -224,7 +274,13 @@ private fun ResultControls(result: RoundResult?, onNextRound: () -> Unit) {
         null -> ""
     }
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(message)
+        if (hands.size > 1) {
+            hands.forEachIndexed { index, hand ->
+                Text("Hand ${index + 1}: ${messageFor(hand.result)}")
+            }
+        } else {
+            Text(messageFor(hands.firstOrNull()?.result))
+        }
         Button(onClick = onNextRound) { Text("Next round") }
     }
 }
