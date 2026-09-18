@@ -56,4 +56,9 @@ class BlackjackViewModel(application: Application) : AndroidViewModel(applicatio
         engine.startNextRound()
         syncState()
     }
+
+    fun resetBankroll() {
+        engine.resetBankroll(STARTING_BANKROLL)
+        syncState()
+    }
 }

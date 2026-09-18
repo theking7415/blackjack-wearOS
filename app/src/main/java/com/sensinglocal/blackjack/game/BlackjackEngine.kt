@@ -58,6 +58,10 @@ class BlackjackEngine(startingBankroll: Int) {
     var state = BlackjackState(bankroll = startingBankroll)
         private set
 
+    fun resetBankroll(amount: Int) {
+        state = BlackjackState(bankroll = amount)
+    }
+
     fun placeBet(amount: Int) {
         require(amount in 1..state.bankroll) { "Bet must be between 1 and current bankroll" }
         var deck = state.deck

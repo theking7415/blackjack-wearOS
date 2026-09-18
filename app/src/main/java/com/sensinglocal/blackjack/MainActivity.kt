@@ -74,7 +74,8 @@ class MainActivity : ComponentActivity() {
                                     onStand = viewModel::stand,
                                     onDoubleDown = viewModel::doubleDown,
                                     onSplit = viewModel::split,
-                                    onNextRound = viewModel::nextRound
+                                    onNextRound = viewModel::nextRound,
+                                    onResetBankroll = viewModel::resetBankroll
                                 )
                             }
                         }
@@ -158,7 +159,8 @@ fun BlackjackScreen(
     onStand: () -> Unit,
     onDoubleDown: () -> Unit,
     onSplit: () -> Unit,
-    onNextRound: () -> Unit
+    onNextRound: () -> Unit,
+    onResetBankroll: () -> Unit
 ) {
     Box(
         modifier = Modifier.fillMaxSize(),
@@ -176,7 +178,11 @@ fun BlackjackScreen(
             DealerHandRow(state = state)
 
             when (state.phase) {
-                RoundPhase.BETTING -> BettingControls(bankroll = state.bankroll, onBet = onBet)
+                RoundPhase.BETTING -> BettingControls(
+                    bankroll = state.bankroll,
+                    onBet = onBet,
+                    onResetBankroll = onResetBankroll
+                )
                 RoundPhase.PLAYER_TURN -> PlayerControls(
                     state = state,
                     onHit = onHit,
@@ -225,7 +231,16 @@ private fun PlayerHandsColumn(state: BlackjackState) {
 }
 
 @Composable
-private fun BettingControls(bankroll: Int, onBet: (Int) -> Unit) {
+private fun BettingControls(bankroll: Int, onBet: (Int) -> Unit, onResetBankroll: () -> Unit) {
+    if (bankroll <= 0) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("You're broke!")
+            Button(onClick = onResetBankroll) {
+                Text("Reset Bankroll")
+            }
+        }
+        return
+    }
     val quickBets = listOf(10, 25, 50).filter { it <= bankroll }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         quickBets.forEach { amount ->
