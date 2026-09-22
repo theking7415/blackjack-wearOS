@@ -4,22 +4,14 @@ import android.graphics.Paint as AndroidPaint
 import android.graphics.Typeface
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -39,24 +31,16 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.wear.compose.material.Text
 import kotlin.math.cos
 import kotlin.math.sin
-
-private val MenuRed = Color(0xFFC8102E)
-private val MenuRedDark = Color(0xFF7A0C1E)
-private val MenuGold = Color(0xFFD4AF37)
-private val MenuBlack = Color(0xFF0A0A0A)
 
 // One full lap every 20s (3 RPM = 3 revolutions / 60s).
 private const val ORBIT_PERIOD_MS = 20000
@@ -68,64 +52,6 @@ private const val TITLE_EXCLUSION_HALF_DEG = 50f
 private const val TITLE_SPAN_HALF_DEG = 42f
 // Total icons spaced evenly around the ring, cycling through the four suits.
 private const val ORBIT_ICON_COUNT = 36
-
-// Notched top, single point at the bottom, no stem.
-private val heartGrid = arrayOf(
-    ".XX..XX.",
-    "XXXXXXXX",
-    "XXXXXXXX",
-    "XXXXXXXX",
-    ".XXXXXX.",
-    "..XXXX..",
-    "...XX...",
-    "........",
-)
-// Single point top and bottom, symmetric, no stem — distinct from the heart's notch.
-private val diamondGrid = arrayOf(
-    "...XX...",
-    "..XXXX..",
-    ".XXXXXX.",
-    "XXXXXXXX",
-    ".XXXXXX.",
-    "..XXXX..",
-    "...XX...",
-    "........",
-)
-// An upside-down heart (pointed top, flared shoulders, notched feet) over a stem — the
-// classic spade silhouette, distinct from the diamond's plain symmetric point.
-private val spadeGrid = arrayOf(
-    "...XX...",
-    "..XXXX..",
-    ".XXXXXX.",
-    "XXXXXXXX",
-    "XXXXXXXX",
-    ".XX..XX.",
-    "...XX...",
-    "...XX...",
-    "...XX...",
-)
-// Three overlapping round lobes (built from three circles) over a stem — wider than the
-// other suits so it reads as genuinely three-bulbed rather than a single blob.
-private val clubGrid = arrayOf(
-    "....XXX....",
-    "...XXXXX...",
-    "...XXXXX...",
-    ".XXXXXXXXX.",
-    "XXXXXXXXXXX",
-    "XXXXX.XXXXX",
-    "XXXXX.XXXXX",
-    "....XXX....",
-    "....XXX....",
-    "....XXX....",
-    "....XXX....",
-)
-
-private enum class OrbitIcon(val grid: Array<String>) {
-    CLUB(clubGrid),
-    SPADE(spadeGrid),
-    HEART(heartGrid),
-    DIAMOND(diamondGrid)
-}
 
 @Composable
 fun MainMenuScreen(onPlay: () -> Unit) {
@@ -140,6 +66,8 @@ fun MainMenuScreen(onPlay: () -> Unit) {
         label = "orbitAngle"
     )
     val density = LocalDensity.current
+    val context = LocalContext.current
+    val titleTypeface = remember { vt323Typeface(context) }
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
 
     // The icon ring and the title/mask overlay never change once the screen size is known —
@@ -155,7 +83,7 @@ fun MainMenuScreen(onPlay: () -> Unit) {
     }
     val titleOverlayBitmap = remember(canvasSize) {
         if (canvasSize.width > 0 && canvasSize.height > 0) {
-            renderTitleOverlayBitmap(canvasSize, density)
+            renderTitleOverlayBitmap(canvasSize, density, titleTypeface)
         } else null
     }
 
@@ -189,7 +117,7 @@ fun MainMenuScreen(onPlay: () -> Unit) {
             titleOverlayBitmap?.let { bitmap -> drawImage(bitmap) }
         }
 
-        PlayButton(onPlay = onPlay)
+        PixelButton(text = "PLAY", onClick = onPlay, width = 140.dp, height = 56.dp, fontSize = 20.sp)
     }
 }
 
@@ -201,7 +129,7 @@ private fun renderIconRingBitmap(sizePx: IntSize, density: Density): ImageBitmap
         val edgeRadius = canvasSize.minDimension / 2f
         val radius = edgeRadius - 30f
         val iconSpanDeg = 360f / ORBIT_ICON_COUNT
-        val suits = OrbitIcon.entries
+        val suits = SuitIcon.entries
         for (index in 0 until ORBIT_ICON_COUNT) {
             val angleDeg = index * iconSpanDeg
             val rad = Math.toRadians(angleDeg.toDouble())
@@ -216,14 +144,14 @@ private fun renderIconRingBitmap(sizePx: IntSize, density: Density): ImageBitmap
     return bitmap
 }
 
-private fun renderTitleOverlayBitmap(sizePx: IntSize, density: Density): ImageBitmap {
+private fun renderTitleOverlayBitmap(sizePx: IntSize, density: Density, typeface: Typeface): ImageBitmap {
     val bitmap = ImageBitmap(sizePx.width, sizePx.height)
     val canvasSize = Size(sizePx.width.toFloat(), sizePx.height.toFloat())
     CanvasDrawScope().draw(density, LayoutDirection.Ltr, ComposeCanvas(bitmap), canvasSize) {
         val center = Offset(canvasSize.width / 2f, canvasSize.height / 2f)
         val edgeRadius = canvasSize.minDimension / 2f
         drawTitleWedgeMask(center, edgeRadius)
-        drawCurvedTitle(center, edgeRadius, density)
+        drawCurvedTitle(center, edgeRadius, density, typeface)
     }
     return bitmap
 }
@@ -251,33 +179,13 @@ private fun DrawScope.drawTitleWedgeMask(center: Offset, edgeRadius: Float) {
     drawPath(path, color = MenuRedDark)
 }
 
-private fun DrawScope.drawPixelIcon(grid: Array<String>, color: Color, center: Offset, cellSize: Float) {
-    val rows = grid.size
-    val cols = grid.maxOf { it.length }
-    val topLeft = Offset(
-        x = center.x - (cols * cellSize) / 2f,
-        y = center.y - (rows * cellSize) / 2f
-    )
-    grid.forEachIndexed { row, line ->
-        line.forEachIndexed { col, ch ->
-            if (ch == 'X') {
-                drawRect(
-                    color = color,
-                    topLeft = Offset(topLeft.x + col * cellSize, topLeft.y + row * cellSize),
-                    size = Size(cellSize, cellSize)
-                )
-            }
-        }
-    }
-}
-
-private fun DrawScope.drawCurvedTitle(center: Offset, edgeRadius: Float, density: Density) {
+private fun DrawScope.drawCurvedTitle(center: Offset, edgeRadius: Float, density: Density, typeface: Typeface) {
     val text = "BLACKJACK"
     val titleRadius = edgeRadius - 46f
     val titlePaint = AndroidPaint().apply {
         color = android.graphics.Color.BLACK
-        textSize = with(density) { 19.sp.toPx() }
-        typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+        textSize = with(density) { 24.sp.toPx() }
+        this.typeface = Typeface.create(typeface, Typeface.BOLD)
         isAntiAlias = false
         textAlign = AndroidPaint.Align.CENTER
     }
@@ -292,42 +200,5 @@ private fun DrawScope.drawCurvedTitle(center: Offset, edgeRadius: Float, density
         canvas.translate(0f, -titleRadius)
         canvas.drawText(char.toString(), 0f, 0f, titlePaint)
         canvas.restore()
-    }
-}
-
-@Composable
-private fun PlayButton(onPlay: () -> Unit) {
-    val haptic = LocalHapticFeedback.current
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val pressOffset by animateDpAsState(targetValue = if (isPressed) 4.dp else 0.dp, label = "playPress")
-
-    Box(modifier = Modifier.size(width = 140.dp, height = 56.dp)) {
-        // Fixed dark base layer — creates the chunky drop-shadow the top layer sinks into.
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .offset(x = 4.dp, y = 4.dp)
-                .background(MenuBlack)
-        )
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .offset(x = pressOffset, y = pressOffset)
-                .background(MenuRed)
-                .border(BorderStroke(3.dp, MenuGold))
-                .clickable(interactionSource = interactionSource, indication = null) {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    onPlay()
-                },
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = "PLAY",
-                color = Color.Black,
-                fontWeight = FontWeight.Black,
-                fontSize = 20.sp
-            )
-        }
     }
 }

@@ -8,6 +8,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -26,22 +27,24 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.wear.compose.material.Button
+import androidx.compose.ui.unit.sp
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.SwipeToDismissBox
 import androidx.wear.compose.material.Text
+import androidx.wear.compose.material.Typography
 import com.sensinglocal.blackjack.game.BlackjackState
 import com.sensinglocal.blackjack.game.PlayerHand
 import com.sensinglocal.blackjack.game.RoundPhase
 import com.sensinglocal.blackjack.game.RoundResult
 import kotlinx.coroutines.delay
+import kotlin.math.pow
 import kotlin.random.Random
-
-private val SplashRed = Color(0xFF5C0000)
 
 private enum class AppScreen { SPLASH, MENU, GAME }
 
@@ -51,7 +54,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
+            // VT323 (pixel-art monospace, Google Fonts) set as the default face for every
+            // text style, so all Compose Text() calls app-wide pick it up automatically.
+            MaterialTheme(typography = Typography(defaultFontFamily = VT323)) {
                 var screen by remember { mutableStateOf(AppScreen.SPLASH) }
                 Box(modifier = Modifier.fillMaxSize()) {
                     when (screen) {
@@ -94,10 +99,14 @@ private const val WIPE_COLUMNS = 18
 @Composable
 private fun SplashScreen(onFinished: () -> Unit) {
     val wipeProgress = remember { Animatable(0f) }
-    // Each column drains upward at its own speed/delay so the boundary looks like an
-    // uneven, dripping edge (jagged peaks where red lingers) rather than a clean wipe.
-    val columnSpeeds = remember { List(WIPE_COLUMNS + 1) { 0.7f + Random.nextFloat() * 0.6f } }
-    val columnDelays = remember { List(WIPE_COLUMNS + 1) { Random.nextFloat() * 0.4f } }
+    // Each column drains upward at its own delay/curve so the boundary looks like an uneven,
+    // dripping edge (jagged peaks where red lingers) rather than a clean wipe. The exponent
+    // (rather than a raw speed multiplier) controls how eagerly a column catches up after its
+    // delay — this guarantees every column's local progress reaches exactly 1 when the overall
+    // animation reaches t=1, so the screen is always fully drained (never cut off mid-drip)
+    // right as onFinished fires.
+    val columnDelays = remember { List(WIPE_COLUMNS + 1) { Random.nextFloat() * 0.35f } }
+    val columnExponents = remember { List(WIPE_COLUMNS + 1) { 0.6f + Random.nextFloat() * 1.0f } }
 
     LaunchedEffect(Unit) {
         delay(450)
@@ -123,12 +132,16 @@ private fun SplashScreen(onFinished: () -> Unit) {
     ) {
         val w = size.width
         val h = size.height
-        drawRect(color = SplashRed)
+        // Same dark red as the menu background (MenuRedDark), so the wipe reveals a screen
+        // that already matches — no color jump at the moment the splash disappears.
+        drawRect(color = MenuRedDark)
 
         val t = wipeProgress.value
         val points = (0..WIPE_COLUMNS).map { i ->
             val x = w * i / WIPE_COLUMNS
-            val local = ((t - columnDelays[i]) * columnSpeeds[i]).coerceIn(0f, 1f)
+            val delay = columnDelays[i]
+            val raw = if (t <= delay) 0f else ((t - delay) / (1f - delay)).coerceIn(0f, 1f)
+            val local = raw.pow(columnExponents[i])
             Offset(x, h * (1f - local))
         }
 
@@ -163,7 +176,11 @@ fun BlackjackScreen(
     onResetBankroll: () -> Unit
 ) {
     Box(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            // Green felt blackjack table — radial gradient reads as a simple table vignette
+            // on the round display without needing a full pixel-tiled texture.
+            .background(Brush.radialGradient(listOf(TableGreen, TableGreenDark))),
         contentAlignment = Alignment.Center
     ) {
         Column(
@@ -173,7 +190,7 @@ fun BlackjackScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceBetween
         ) {
-            Text("Bankroll: ₹${state.bankroll}")
+            FeltText("Bankroll: ₹${state.bankroll}", fontSize = 17.sp)
 
             DealerHandRow(state = state)
 
@@ -190,7 +207,7 @@ fun BlackjackScreen(
                     onDoubleDown = onDoubleDown,
                     onSplit = onSplit
                 )
-                RoundPhase.DEALER_TURN -> Text("Dealer playing…")
+                RoundPhase.DEALER_TURN -> FeltText("Dealer playing…")
                 RoundPhase.ROUND_OVER -> ResultControls(hands = state.hands, onNextRound = onNextRound)
             }
 
@@ -199,33 +216,42 @@ fun BlackjackScreen(
     }
 }
 
+/** Gold text on the green felt — readable against the table background. */
+@Composable
+private fun FeltText(text: String, fontSize: androidx.compose.ui.unit.TextUnit = 16.sp) {
+    Text(text = text, color = MenuGold, fontWeight = FontWeight.Bold, fontSize = fontSize)
+}
+
 @Composable
 private fun DealerHandRow(state: BlackjackState) {
-    val cardsText = if (state.dealerHoleCardRevealed || state.dealerCards.isEmpty()) {
-        state.dealerCards.joinToString(" ") { it.label }
-    } else {
-        // Hole card stays face-down until the player's turn is over, as at a real table.
-        // Uses an emoji-range glyph ("🎴") rather than the Unicode Playing Cards block
-        // (e.g. "🂠"), which commonly lacks a font fallback on Android/Wear OS.
-        listOf(state.dealerCards.first().label, "🎴").joinToString(" ")
-    }
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("Dealer: $cardsText")
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        FeltText("Dealer")
+        Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+            state.dealerCards.forEachIndexed { index, card ->
+                val faceDown = index == 1 && !state.dealerHoleCardRevealed
+                PixelCard(card = card, faceDown = faceDown)
+            }
+        }
         if (state.dealerHoleCardRevealed && state.dealerCards.isNotEmpty()) {
-            Text("(${state.dealerTotal})")
+            FeltText("(${state.dealerTotal})", fontSize = 14.sp)
         }
     }
 }
 
 @Composable
 private fun PlayerHandsColumn(state: BlackjackState) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         state.hands.forEachIndexed { index, hand ->
             val label = if (state.hands.size > 1) "Hand ${index + 1}" else "You"
             val marker = if (state.phase == RoundPhase.PLAYER_TURN && state.hands.size > 1 &&
                 index == state.activeHandIndex
             ) "▶ " else ""
-            Text("$marker$label: ${hand.cards.joinToString(" ") { it.label }} (${hand.total})")
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                FeltText("$marker$label (${hand.total})", fontSize = 14.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                    hand.cards.forEach { card -> PixelCard(card = card) }
+                }
+            }
         }
     }
 }
@@ -233,20 +259,16 @@ private fun PlayerHandsColumn(state: BlackjackState) {
 @Composable
 private fun BettingControls(bankroll: Int, onBet: (Int) -> Unit, onResetBankroll: () -> Unit) {
     if (bankroll <= 0) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("You're broke!")
-            Button(onClick = onResetBankroll) {
-                Text("Reset Bankroll")
-            }
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            FeltText("You're broke!")
+            PixelButton(text = "Reset Bankroll", onClick = onResetBankroll, width = 132.dp, height = 38.dp, fontSize = 13.sp)
         }
         return
     }
     val quickBets = listOf(10, 25, 50).filter { it <= bankroll }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         quickBets.forEach { amount ->
-            Button(onClick = { onBet(amount) }) {
-                Text("₹$amount")
-            }
+            PixelButton(text = "₹$amount", onClick = { onBet(amount) }, width = 68.dp, height = 38.dp, fontSize = 15.sp)
         }
     }
 }
@@ -261,16 +283,16 @@ private fun PlayerControls(
 ) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = onHit) { Text("Hit") }
-            Button(onClick = onStand) { Text("Stand") }
+            PixelButton(text = "Hit", onClick = onHit, width = 72.dp, height = 38.dp, fontSize = 15.sp)
+            PixelButton(text = "Stand", onClick = onStand, width = 72.dp, height = 38.dp, fontSize = 15.sp)
         }
         if (state.canDoubleDown || state.canSplit) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (state.canDoubleDown) {
-                    Button(onClick = onDoubleDown) { Text("Double") }
+                    PixelButton(text = "Double", onClick = onDoubleDown, width = 74.dp, height = 38.dp, fontSize = 14.sp)
                 }
                 if (state.canSplit) {
-                    Button(onClick = onSplit) { Text("Split") }
+                    PixelButton(text = "Split", onClick = onSplit, width = 74.dp, height = 38.dp, fontSize = 14.sp)
                 }
             }
         }
@@ -288,14 +310,14 @@ private fun ResultControls(hands: List<PlayerHand>, onNextRound: () -> Unit) {
         RoundResult.PLAYER_BUST -> "Bust — you lose"
         null -> ""
     }
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         if (hands.size > 1) {
             hands.forEachIndexed { index, hand ->
-                Text("Hand ${index + 1}: ${messageFor(hand.result)}")
+                FeltText("Hand ${index + 1}: ${messageFor(hand.result)}", fontSize = 14.sp)
             }
         } else {
-            Text(messageFor(hands.firstOrNull()?.result))
+            FeltText(messageFor(hands.firstOrNull()?.result))
         }
-        Button(onClick = onNextRound) { Text("Next round") }
+        PixelButton(text = "Next round", onClick = onNextRound, width = 122.dp, height = 38.dp, fontSize = 14.sp)
     }
 }
