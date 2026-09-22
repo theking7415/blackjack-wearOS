@@ -9,9 +9,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Canvas as ComposeCanvas
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sensinglocal.blackjack.game.Card
@@ -25,13 +32,43 @@ private const val SHADOW_OFFSET = 2f
  * Renders one card as a chunky pixel-art rectangle: cream face, black border, rank in the
  * top-left corner and a small pixel suit icon centered below it. Face-down cards (or a null
  * card, used for the dealer's hidden hole card) show a gold-on-red pixel diamond back instead.
+ *
+ * The card face is drawn once into a cached [ImageBitmap] (keyed on card/faceDown/density) and
+ * the live `Canvas` just does one `drawImage` per frame — a hand of cards was previously
+ * re-issuing dozens of `drawRect`/`drawText` calls per card on every redraw (e.g. during
+ * ScalingLazyColumn scroll), which is exactly the per-frame CPU cost that caused jank/battery
+ * drain on this hardware before (see the main-menu icon-ring bitmap-caching fix).
  */
 @Composable
 fun PixelCard(card: Card?, faceDown: Boolean = false, modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    val density = LocalDensity.current
     val typeface = remember { vt323Typeface(context) }
+    val boldTypeface = remember(typeface) { Typeface.create(typeface, Typeface.BOLD) }
+    val widthPx = with(density) { CardWidth.toPx() }
+    val heightPx = with(density) { CardHeight.toPx() }
+    val bitmap = remember(card, faceDown, density) {
+        renderCardBitmap(widthPx, heightPx, card, faceDown, density, boldTypeface)
+    }
     Canvas(modifier = modifier.size(CardWidth, CardHeight)) {
-        val bodySize = Size(size.width - SHADOW_OFFSET, size.height - SHADOW_OFFSET)
+        drawImage(bitmap)
+    }
+}
+
+private fun renderCardBitmap(
+    widthPx: Float,
+    heightPx: Float,
+    card: Card?,
+    faceDown: Boolean,
+    density: Density,
+    boldTypeface: Typeface
+): ImageBitmap {
+    val w = widthPx.toInt().coerceAtLeast(1)
+    val h = heightPx.toInt().coerceAtLeast(1)
+    val bitmap = ImageBitmap(w, h)
+    val canvasSize = Size(w.toFloat(), h.toFloat())
+    CanvasDrawScope().draw(density, LayoutDirection.Ltr, ComposeCanvas(bitmap), canvasSize) {
+        val bodySize = Size(canvasSize.width - SHADOW_OFFSET, canvasSize.height - SHADOW_OFFSET)
 
         // Fixed dark base layer peeking out bottom-right — same chunky-3D language as the buttons.
         drawRect(
@@ -54,7 +91,7 @@ fun PixelCard(card: Card?, faceDown: Boolean = false, modifier: Modifier = Modif
             drawRect(color = MenuBlack, size = bodySize, style = Stroke(width = BORDER_WIDTH))
 
             val suitColor = if (card.suit.isRed()) MenuRed else MenuBlack
-            drawPixelRankText(card.rank.label, suitColor, typeface)
+            drawPixelRankText(card.rank.label, suitColor, boldTypeface)
             drawPixelIcon(
                 grid = gridForSuit(card.suit),
                 color = suitColor,
@@ -63,12 +100,13 @@ fun PixelCard(card: Card?, faceDown: Boolean = false, modifier: Modifier = Modif
             )
         }
     }
+    return bitmap
 }
 
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPixelRankText(
+private fun DrawScope.drawPixelRankText(
     text: String,
     color: androidx.compose.ui.graphics.Color,
-    typeface: Typeface
+    boldTypeface: Typeface
 ) {
     val paint = AndroidPaint().apply {
         this.color = android.graphics.Color.rgb(
@@ -77,7 +115,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPixelRankText(
             (color.blue * 255).toInt()
         )
         textSize = with(this@drawPixelRankText) { 16.sp.toPx() }
-        this.typeface = Typeface.create(typeface, Typeface.BOLD)
+        this.typeface = boldTypeface
         isAntiAlias = false
         textAlign = AndroidPaint.Align.LEFT
     }

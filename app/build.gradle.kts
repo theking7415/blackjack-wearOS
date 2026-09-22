@@ -18,8 +18,13 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Signed with the debug key so this can be installed straight from Android
+            // Studio (Build Variants -> release) or `./gradlew installRelease` for local
+            // performance testing, without needing a real release keystore — there's no
+            // published app yet, so nothing here is publish-facing.
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 

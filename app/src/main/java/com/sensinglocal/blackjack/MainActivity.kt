@@ -10,30 +10,38 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
+import androidx.wear.compose.foundation.lazy.items
+import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
+import androidx.wear.compose.foundation.rememberActiveFocusRequester
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.SwipeToDismissBox
 import androidx.wear.compose.material.Text
@@ -43,6 +51,7 @@ import com.sensinglocal.blackjack.game.PlayerHand
 import com.sensinglocal.blackjack.game.RoundPhase
 import com.sensinglocal.blackjack.game.RoundResult
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.pow
 import kotlin.random.Random
 
@@ -164,6 +173,7 @@ private fun SplashScreen(onFinished: () -> Unit) {
     }
 }
 
+@OptIn(androidx.wear.compose.foundation.ExperimentalWearFoundationApi::class)
 @Composable
 fun BlackjackScreen(
     state: BlackjackState,
@@ -183,36 +193,66 @@ fun BlackjackScreen(
             .background(Brush.radialGradient(listOf(TableGreen, TableGreenDark))),
         contentAlignment = Alignment.Center
     ) {
-        Column(
+        // ScalingLazyColumn (not a plain Column) so content that grows taller than the round
+        // display — e.g. a split adding a second hand row and a Double/Split control row —
+        // scrolls and curves its side padding to the bezel instead of being clipped in the
+        // corners, which a fixed-horizontal-padding Column can't do on a circular screen.
+        // rememberActiveFocusRequester (not a plain remember { FocusRequester() }) — it
+        // requests focus itself once this composable is actually the active one on screen,
+        // which a one-shot LaunchedEffect(Unit) can race (especially nested inside Box /
+        // SwipeToDismissBox as this is) and silently fail to attach, which is why the crown
+        // didn't work with the manual version.
+        val focusRequester = rememberActiveFocusRequester()
+        val coroutineScope = rememberCoroutineScope()
+        val listState = rememberScalingLazyListState()
+        ScalingLazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 24.dp, vertical = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceBetween
+                // compose-foundation 1.3.1 predates the rotaryScrollable modifier (added in
+                // 1.4.0), so crown/bezel rotation is wired manually: rotary events scroll the
+                // list's own state, and focus has to be requested explicitly since nothing
+                // grabs it by default in this version.
+                .onRotaryScrollEvent {
+                    coroutineScope.launch { listState.scrollBy(it.verticalScrollPixels) }
+                    true
+                }
+                .focusRequester(focusRequester)
+                .focusable(),
+            state = listState,
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            FeltText("Bankroll: ₹${state.bankroll}", fontSize = 17.sp)
+            item { FeltText("Bankroll: ₹${state.bankroll}", fontSize = 17.sp) }
 
-            DealerHandRow(state = state)
+            item { DealerHandRow(state = state) }
 
-            when (state.phase) {
-                RoundPhase.BETTING -> BettingControls(
-                    bankroll = state.bankroll,
-                    onBet = onBet,
-                    onResetBankroll = onResetBankroll
-                )
-                RoundPhase.PLAYER_TURN -> PlayerControls(
-                    state = state,
-                    onHit = onHit,
-                    onStand = onStand,
-                    onDoubleDown = onDoubleDown,
-                    onSplit = onSplit
-                )
-                RoundPhase.DEALER_TURN -> FeltText("Dealer playing…")
-                RoundPhase.ROUND_OVER -> ResultControls(hands = state.hands, onNextRound = onNextRound)
+            item {
+                when (state.phase) {
+                    RoundPhase.BETTING -> BettingControls(
+                        bankroll = state.bankroll,
+                        onBet = onBet,
+                        onResetBankroll = onResetBankroll
+                    )
+                    RoundPhase.PLAYER_TURN -> PlayerControls(
+                        state = state,
+                        onHit = onHit,
+                        onStand = onStand,
+                        onDoubleDown = onDoubleDown,
+                        onSplit = onSplit
+                    )
+                    RoundPhase.DEALER_TURN -> FeltText("Dealer playing…")
+                    RoundPhase.ROUND_OVER -> ResultControls(hands = state.hands, onNextRound = onNextRound)
+                }
             }
 
-            PlayerHandsColumn(state = state)
+            items(state.hands.size) { index ->
+                PlayerHandRow(state = state, index = index)
+            }
         }
+        // initialCenterItemIndex on rememberScalingLazyListState is unreliable (known to get
+        // silently overridden back to the top on first layout) — scrolling explicitly after
+        // composition is the working alternative. Item index 2 is the phase-controls section,
+        // directly above the first player-hand item, so this shows both on open.
+        LaunchedEffect(Unit) { listState.scrollToItem(2) }
     }
 }
 
@@ -239,19 +279,16 @@ private fun DealerHandRow(state: BlackjackState) {
 }
 
 @Composable
-private fun PlayerHandsColumn(state: BlackjackState) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        state.hands.forEachIndexed { index, hand ->
-            val label = if (state.hands.size > 1) "Hand ${index + 1}" else "You"
-            val marker = if (state.phase == RoundPhase.PLAYER_TURN && state.hands.size > 1 &&
-                index == state.activeHandIndex
-            ) "▶ " else ""
-            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                FeltText("$marker$label (${hand.total})", fontSize = 14.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                    hand.cards.forEach { card -> PixelCard(card = card) }
-                }
-            }
+private fun PlayerHandRow(state: BlackjackState, index: Int) {
+    val hand = state.hands[index]
+    val label = if (state.hands.size > 1) "Hand ${index + 1}" else "You"
+    val marker = if (state.phase == RoundPhase.PLAYER_TURN && state.hands.size > 1 &&
+        index == state.activeHandIndex
+    ) "▶ " else ""
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        FeltText("$marker$label (${hand.total})", fontSize = 14.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+            hand.cards.forEach { card -> PixelCard(card = card) }
         }
     }
 }

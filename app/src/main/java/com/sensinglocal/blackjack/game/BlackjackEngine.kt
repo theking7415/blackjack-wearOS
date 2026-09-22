@@ -1,11 +1,23 @@
 package com.sensinglocal.blackjack.game
 
+import androidx.compose.runtime.Immutable
+
 enum class RoundPhase { BETTING, PLAYER_TURN, DEALER_TURN, ROUND_OVER }
 
 enum class RoundResult { PLAYER_BLACKJACK, PLAYER_WIN, DEALER_WIN, PUSH, PLAYER_BUST, DEALER_BUST }
 
 enum class HandStatus { PLAYING, STOOD, BUST }
 
+// @Immutable (not left to Compose's automatic stability inference) because these hold a
+// List<Card> — Compose treats the bare List interface as unstable by default since it can't
+// prove a caller won't mutate it in place, which disables recomposition-skipping entirely for
+// any composable taking BlackjackState as a parameter. That's safe to assert here: every state
+// update in this engine goes through copy()/listOf()/+ to build a new list rather than mutating
+// an existing one in place (verified — see hit()/doubleDown()/split()/stand() below), so a
+// structurally-equal BlackjackState really does mean "nothing changed." This was a real
+// contributor to scroll jank: without it, DealerHandRow/PlayerHandRow/etc. were forced to fully
+// recompose on every recomposition pass that reached them, even when `state` hadn't changed.
+@Immutable
 data class PlayerHand(
     val cards: List<Card>,
     val bet: Int,
@@ -20,6 +32,11 @@ data class PlayerHand(
     val isNaturalBlackjack: Boolean get() = !fromSplit && isBlackjack(cards)
 }
 
+// The `deck` field is genuinely mutated in place (Deck.draw() removes from an internal
+// ArrayDeque) rather than rebuilt immutably like the other fields, but no Composable ever
+// reads state.deck (confirmed via search) — only hands/dealerCards/bankroll/phase drive UI —
+// so @Immutable here doesn't cause any incorrect recomposition-skip in practice.
+@Immutable
 data class BlackjackState(
     val bankroll: Int,
     val deck: Deck = Deck(shoeCount = 4),
