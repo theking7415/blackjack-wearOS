@@ -264,6 +264,9 @@ private fun FeltText(text: String, fontSize: androidx.compose.ui.unit.TextUnit =
 
 @Composable
 private fun DealerHandRow(state: BlackjackState) {
+    // No dealer cards yet (e.g. sitting at the betting screen) — nothing to show, so don't
+    // render an orphaned "Dealer" label with no hand under it.
+    if (state.dealerCards.isEmpty()) return
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
         FeltText("Dealer")
         Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -302,11 +305,31 @@ private fun BettingControls(bankroll: Int, onBet: (Int) -> Unit, onResetBankroll
         }
         return
     }
-    val quickBets = listOf(10, 25, 50).filter { it <= bankroll }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        quickBets.forEach { amount ->
-            PixelButton(text = "₹$amount", onClick = { onBet(amount) }, width = 68.dp, height = 38.dp, fontSize = 15.sp)
+    // Custom buy-in stepper instead of fixed ₹10/25/50 buttons — also fixes the low-bankroll
+    // dead end where every fixed amount exceeded what was left to bet. Keyed on bankroll so a
+    // fresh default is picked each time the betting screen is (re)entered, and the step size
+    // scales down for a small bankroll so it's still reachable in a few taps.
+    var betAmount by remember(bankroll) { mutableStateOf(minOf(10, bankroll)) }
+    val step = if (bankroll >= 50) 5 else 1
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PixelButton(
+                text = "-",
+                onClick = { betAmount = (betAmount - step).coerceIn(1, bankroll) },
+                width = 40.dp,
+                height = 38.dp,
+                fontSize = 16.sp
+            )
+            FeltText("₹$betAmount", fontSize = 17.sp)
+            PixelButton(
+                text = "+",
+                onClick = { betAmount = (betAmount + step).coerceIn(1, bankroll) },
+                width = 40.dp,
+                height = 38.dp,
+                fontSize = 16.sp
+            )
         }
+        PixelButton(text = "Bet ₹$betAmount", onClick = { onBet(betAmount) }, width = 110.dp, height = 38.dp, fontSize = 14.sp)
     }
 }
 
