@@ -311,22 +311,18 @@ private fun BettingControls(bankroll: Int, onBet: (Int) -> Unit, onResetBankroll
     // scales down for a small bankroll so it's still reachable in a few taps.
     var betAmount by remember(bankroll) { mutableStateOf(minOf(10, bankroll)) }
     val step = if (bankroll >= 50) 5 else 1
-    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            PixelButton(
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        // Amount sits above the +/- row (not between the buttons) so a thumb resting on
+        // either button never covers it, even while holding to fast-repeat.
+        FeltText("₹$betAmount", fontSize = 20.sp)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            RepeatingPixelButton(
                 text = "-",
-                onClick = { betAmount = (betAmount - step).coerceIn(1, bankroll) },
-                width = 40.dp,
-                height = 38.dp,
-                fontSize = 16.sp
+                onStep = { betAmount = (betAmount - step).coerceIn(1, bankroll) }
             )
-            FeltText("₹$betAmount", fontSize = 17.sp)
-            PixelButton(
+            RepeatingPixelButton(
                 text = "+",
-                onClick = { betAmount = (betAmount + step).coerceIn(1, bankroll) },
-                width = 40.dp,
-                height = 38.dp,
-                fontSize = 16.sp
+                onStep = { betAmount = (betAmount + step).coerceIn(1, bankroll) }
             )
         }
         PixelButton(text = "Bet ₹$betAmount", onClick = { onBet(betAmount) }, width = 110.dp, height = 38.dp, fontSize = 14.sp)
