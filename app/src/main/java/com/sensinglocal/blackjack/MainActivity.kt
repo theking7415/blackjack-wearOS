@@ -229,7 +229,11 @@ fun BlackjackScreen(
             state = listState,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            item { FeltText("Bankroll: ₹${state.bankroll}", fontSize = 17.sp) }
+            item {
+                EntranceFade(trigger = flightController.roundId) {
+                    FeltText("Bankroll: ₹${state.bankroll}", fontSize = 17.sp)
+                }
+            }
 
             item { DealerHandRow(state = state, flightController = flightController) }
 
@@ -242,6 +246,7 @@ fun BlackjackScreen(
                     )
                     RoundPhase.PLAYER_TURN -> PlayerControls(
                         state = state,
+                        flightController = flightController,
                         onHit = onHit,
                         onStand = onStand,
                         onDoubleDown = onDoubleDown,
@@ -279,9 +284,12 @@ private fun DealerHandRow(state: BlackjackState, flightController: FlightControl
         // No dealer cards yet (e.g. sitting at the betting screen) — no orphaned "Dealer" label
         // with no hand under it, but the deck itself always stays visible so its screen anchor
         // is already known the instant the first card is dealt.
-        if (state.dealerCards.isNotEmpty()) FeltText("Dealer")
+        if (state.dealerCards.isNotEmpty()) {
+            EntranceFade(trigger = flightController.roundId) { FeltText("Dealer") }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
             DeckStack(
+                entranceKey = flightController.roundId,
                 // Kept mounted (not conditionally composed) even at the betting screen — its
                 // position needs to already be tracked the instant the first bet deals cards —
                 // but invisible via alpha until there's actually a hand to deal from it into,
@@ -319,7 +327,9 @@ private fun PlayerHandRow(state: BlackjackState, index: Int, flightController: F
     ) "▶ " else ""
     val rowKey = "hand-$index"
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        FeltText("$marker$label (${hand.total})", fontSize = 14.sp)
+        EntranceFade(trigger = flightController.roundId) {
+            FeltText("$marker$label (${hand.total})", fontSize = 14.sp)
+        }
         Row(
             horizontalArrangement = Arrangement.spacedBy(PixelCardSpacing),
             modifier = Modifier.onGloballyPositioned { flightController.anchors[rowKey] = it.positionInRoot() }
@@ -371,23 +381,28 @@ private fun BettingControls(bankroll: Int, onBet: (Int) -> Unit, onResetBankroll
 @Composable
 private fun PlayerControls(
     state: BlackjackState,
+    flightController: FlightController,
     onHit: () -> Unit,
     onStand: () -> Unit,
     onDoubleDown: () -> Unit,
     onSplit: () -> Unit
 ) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            PixelButton(text = "Hit", onClick = onHit, width = 72.dp, height = 38.dp, fontSize = 15.sp)
-            PixelButton(text = "Stand", onClick = onStand, width = 72.dp, height = 38.dp, fontSize = 15.sp)
-        }
-        if (state.canDoubleDown || state.canSplit) {
+    // Keyed on roundId (not just this composable's own mount) so a re-entry into PLAYER_TURN
+    // that doesn't remount this composable still fades in correctly.
+    EntranceFade(trigger = flightController.roundId) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (state.canDoubleDown) {
-                    PixelButton(text = "Double", onClick = onDoubleDown, width = 74.dp, height = 38.dp, fontSize = 14.sp)
-                }
-                if (state.canSplit) {
-                    PixelButton(text = "Split", onClick = onSplit, width = 74.dp, height = 38.dp, fontSize = 14.sp)
+                PixelButton(text = "Hit", onClick = onHit, width = 72.dp, height = 38.dp, fontSize = 15.sp)
+                PixelButton(text = "Stand", onClick = onStand, width = 72.dp, height = 38.dp, fontSize = 15.sp)
+            }
+            if (state.canDoubleDown || state.canSplit) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (state.canDoubleDown) {
+                        PixelButton(text = "Double", onClick = onDoubleDown, width = 74.dp, height = 38.dp, fontSize = 14.sp)
+                    }
+                    if (state.canSplit) {
+                        PixelButton(text = "Split", onClick = onSplit, width = 74.dp, height = 38.dp, fontSize = 14.sp)
+                    }
                 }
             }
         }
