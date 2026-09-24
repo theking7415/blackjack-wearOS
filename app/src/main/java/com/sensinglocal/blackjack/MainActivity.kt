@@ -6,6 +6,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -51,9 +53,11 @@ import androidx.wear.compose.material.SwipeToDismissBox
 import androidx.wear.compose.material.Text
 import androidx.wear.compose.material.Typography
 import com.sensinglocal.blackjack.game.BlackjackState
+import com.sensinglocal.blackjack.game.HandStatus
 import com.sensinglocal.blackjack.game.PlayerHand
 import com.sensinglocal.blackjack.game.RoundPhase
 import com.sensinglocal.blackjack.game.RoundResult
+import com.sensinglocal.blackjack.game.isBust
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.pow
@@ -230,8 +234,9 @@ fun BlackjackScreen(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             item {
+                val displayedBankroll = rememberAnimatedBankroll(state.bankroll)
                 EntranceFade(trigger = flightController.roundId) {
-                    FeltText("Bankroll: ₹${state.bankroll}", fontSize = 17.sp)
+                    FeltText("Bankroll: ₹$displayedBankroll", fontSize = 17.sp)
                 }
             }
 
@@ -298,16 +303,26 @@ private fun DealerHandRow(state: BlackjackState, flightController: FlightControl
                     .onGloballyPositioned { flightController.deckAnchor = it.positionInRoot() }
                     .alpha(if (state.dealerCards.isEmpty()) 0f else 1f)
             )
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(PixelCardSpacing),
-                modifier = Modifier.onGloballyPositioned { flightController.anchors["dealer"] = it.positionInRoot() }
-            ) {
-                state.dealerCards.forEachIndexed { index, card ->
-                    if (flightController.isFlying(SlotKey("dealer", index))) {
-                        Box(modifier = Modifier.size(PixelCardWidth, PixelCardHeight))
-                    } else {
-                        val faceDown = index == 1 && !state.dealerHoleCardRevealed
-                        PixelCard(card = card, faceDown = faceDown)
+            // Dealer has no HandStatus of its own — derive a pseudo-status so a dealer bust gets
+            // the same shake/flash/stamp treatment as a player bust, only once the hole card is
+            // actually revealed (not the instant the round resolves internally).
+            val dealerStatus = if (state.dealerHoleCardRevealed && isBust(state.dealerCards)) {
+                HandStatus.BUST
+            } else {
+                HandStatus.PLAYING
+            }
+            HandStatusEffect(status = dealerStatus) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(PixelCardSpacing),
+                    modifier = Modifier.onGloballyPositioned { flightController.anchors["dealer"] = it.positionInRoot() }
+                ) {
+                    state.dealerCards.forEachIndexed { index, card ->
+                        if (flightController.isFlying(SlotKey("dealer", index))) {
+                            Box(modifier = Modifier.size(PixelCardWidth, PixelCardHeight))
+                        } else {
+                            val faceDown = index == 1 && !state.dealerHoleCardRevealed
+                            PixelCard(card = card, faceDown = faceDown)
+                        }
                     }
                 }
             }
@@ -330,15 +345,17 @@ private fun PlayerHandRow(state: BlackjackState, index: Int, flightController: F
         EntranceFade(trigger = flightController.roundId) {
             FeltText("$marker$label (${hand.total})", fontSize = 14.sp)
         }
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(PixelCardSpacing),
-            modifier = Modifier.onGloballyPositioned { flightController.anchors[rowKey] = it.positionInRoot() }
-        ) {
-            hand.cards.forEachIndexed { cardIndex, card ->
-                if (flightController.isFlying(SlotKey(rowKey, cardIndex))) {
-                    Box(modifier = Modifier.size(PixelCardWidth, PixelCardHeight))
-                } else {
-                    PixelCard(card = card)
+        HandStatusEffect(status = hand.status) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(PixelCardSpacing),
+                modifier = Modifier.onGloballyPositioned { flightController.anchors[rowKey] = it.positionInRoot() }
+            ) {
+                hand.cards.forEachIndexed { cardIndex, card ->
+                    if (flightController.isFlying(SlotKey(rowKey, cardIndex))) {
+                        Box(modifier = Modifier.size(PixelCardWidth, PixelCardHeight))
+                    } else {
+                        PixelCard(card = card)
+                    }
                 }
             }
         }
@@ -409,24 +426,58 @@ private fun PlayerControls(
     }
 }
 
+private fun resultMessage(result: RoundResult?): String = when (result) {
+    RoundResult.PLAYER_BLACKJACK -> "Blackjack! You win"
+    RoundResult.PLAYER_WIN -> "You win"
+    RoundResult.DEALER_BUST -> "Dealer busts — you win"
+    RoundResult.PUSH -> "Push"
+    RoundResult.DEALER_WIN -> "Dealer wins"
+    RoundResult.PLAYER_BUST -> "Bust — you lose"
+    null -> ""
+}
+
+private fun resultColor(result: RoundResult?): Color = when (result) {
+    RoundResult.PLAYER_BLACKJACK, RoundResult.PLAYER_WIN, RoundResult.DEALER_BUST -> ResultWinGreen
+    RoundResult.PUSH -> MenuGold
+    RoundResult.DEALER_WIN, RoundResult.PLAYER_BUST -> ResultLoseRed
+    null -> MenuGold
+}
+
+/** A fresh composable instance every round (mounted only while phase == ROUND_OVER), so a
+ * plain LaunchedEffect(Unit) on mount is enough to fire the pop-in once per result. */
 @Composable
 private fun ResultControls(hands: List<PlayerHand>, onNextRound: () -> Unit) {
-    fun messageFor(result: RoundResult?): String = when (result) {
-        RoundResult.PLAYER_BLACKJACK -> "Blackjack! You win"
-        RoundResult.PLAYER_WIN -> "You win"
-        RoundResult.DEALER_BUST -> "Dealer busts — you win"
-        RoundResult.PUSH -> "Push"
-        RoundResult.DEALER_WIN -> "Dealer wins"
-        RoundResult.PLAYER_BUST -> "Bust — you lose"
-        null -> ""
+    val scale = remember { Animatable(0.5f) }
+    LaunchedEffect(Unit) {
+        scale.animateTo(
+            targetValue = 1f,
+            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)
+        )
     }
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        if (hands.size > 1) {
-            hands.forEachIndexed { index, hand ->
-                FeltText("Hand ${index + 1}: ${messageFor(hand.result)}", fontSize = 14.sp)
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.graphicsLayer { scaleX = scale.value; scaleY = scale.value }
+        ) {
+            if (hands.size > 1) {
+                hands.forEachIndexed { index, hand ->
+                    Text(
+                        text = "Hand ${index + 1}: ${resultMessage(hand.result)}",
+                        color = resultColor(hand.result),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                }
+            } else {
+                val result = hands.firstOrNull()?.result
+                Text(
+                    text = resultMessage(result),
+                    color = resultColor(result),
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
             }
-        } else {
-            FeltText(messageFor(hands.firstOrNull()?.result))
         }
         PixelButton(text = "Next round", onClick = onNextRound, width = 122.dp, height = 38.dp, fontSize = 14.sp)
     }

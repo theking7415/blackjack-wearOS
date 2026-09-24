@@ -42,6 +42,9 @@ val MenuBlack = Color(0xFF0A0A0A)
 val TableGreen = Color(0xFF0B6623)
 val TableGreenDark = Color(0xFF042A0D)
 val CardCream = Color(0xFFF3ECD8)
+val ResultWinGreen = Color(0xFF4CD964)
+val ResultLoseRed = Color(0xFFFF5A5A)
+val BustFlashRed = Color(0xFFFF3B30)
 
 /**
  * The main menu's PLAY button, generalized: chunky pixel-art 3D button (dark fixed base
