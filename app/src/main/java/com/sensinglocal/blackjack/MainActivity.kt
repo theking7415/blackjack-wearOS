@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -27,6 +28,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
@@ -35,6 +37,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.rotary.onRotaryScrollEvent
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -205,6 +209,10 @@ fun BlackjackScreen(
         val focusRequester = rememberActiveFocusRequester()
         val coroutineScope = rememberCoroutineScope()
         val listState = rememberScalingLazyListState()
+        // Diffs each state change into per-card "flights" from the dealer's deck to their
+        // landing slot (see CardFlight.kt) — created here, above the list, so the hand rows
+        // below can suppress a card's normal render while it's still flying.
+        val flightController = rememberFlightController(state)
         ScalingLazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -223,7 +231,7 @@ fun BlackjackScreen(
         ) {
             item { FeltText("Bankroll: ₹${state.bankroll}", fontSize = 17.sp) }
 
-            item { DealerHandRow(state = state) }
+            item { DealerHandRow(state = state, flightController = flightController) }
 
             item {
                 when (state.phase) {
@@ -245,7 +253,7 @@ fun BlackjackScreen(
             }
 
             items(state.hands.size) { index ->
-                PlayerHandRow(state = state, index = index)
+                PlayerHandRow(state = state, index = index, flightController = flightController)
             }
         }
         // initialCenterItemIndex on rememberScalingLazyListState is unreliable (known to get
@@ -253,6 +261,9 @@ fun BlackjackScreen(
         // composition is the working alternative. Item index 2 is the phase-controls section,
         // directly above the first player-hand item, so this shows both on open.
         LaunchedEffect(Unit) { listState.scrollToItem(2) }
+
+        // On top of everything: the cards currently flying from the deck to their slot.
+        CardFlightOverlay(controller = flightController, modifier = Modifier.fillMaxSize())
     }
 }
 
@@ -263,16 +274,34 @@ private fun FeltText(text: String, fontSize: androidx.compose.ui.unit.TextUnit =
 }
 
 @Composable
-private fun DealerHandRow(state: BlackjackState) {
-    // No dealer cards yet (e.g. sitting at the betting screen) — nothing to show, so don't
-    // render an orphaned "Dealer" label with no hand under it.
-    if (state.dealerCards.isEmpty()) return
+private fun DealerHandRow(state: BlackjackState, flightController: FlightController) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        FeltText("Dealer")
-        Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-            state.dealerCards.forEachIndexed { index, card ->
-                val faceDown = index == 1 && !state.dealerHoleCardRevealed
-                PixelCard(card = card, faceDown = faceDown)
+        // No dealer cards yet (e.g. sitting at the betting screen) — no orphaned "Dealer" label
+        // with no hand under it, but the deck itself always stays visible so its screen anchor
+        // is already known the instant the first card is dealt.
+        if (state.dealerCards.isNotEmpty()) FeltText("Dealer")
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            DeckStack(
+                // Kept mounted (not conditionally composed) even at the betting screen — its
+                // position needs to already be tracked the instant the first bet deals cards —
+                // but invisible via alpha until there's actually a hand to deal from it into,
+                // so it doesn't show up on the bet-selection screen.
+                modifier = Modifier
+                    .onGloballyPositioned { flightController.deckAnchor = it.positionInRoot() }
+                    .alpha(if (state.dealerCards.isEmpty()) 0f else 1f)
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(PixelCardSpacing),
+                modifier = Modifier.onGloballyPositioned { flightController.anchors["dealer"] = it.positionInRoot() }
+            ) {
+                state.dealerCards.forEachIndexed { index, card ->
+                    if (flightController.isFlying(SlotKey("dealer", index))) {
+                        Box(modifier = Modifier.size(PixelCardWidth, PixelCardHeight))
+                    } else {
+                        val faceDown = index == 1 && !state.dealerHoleCardRevealed
+                        PixelCard(card = card, faceDown = faceDown)
+                    }
+                }
             }
         }
         if (state.dealerHoleCardRevealed && state.dealerCards.isNotEmpty()) {
@@ -282,16 +311,26 @@ private fun DealerHandRow(state: BlackjackState) {
 }
 
 @Composable
-private fun PlayerHandRow(state: BlackjackState, index: Int) {
+private fun PlayerHandRow(state: BlackjackState, index: Int, flightController: FlightController) {
     val hand = state.hands[index]
     val label = if (state.hands.size > 1) "Hand ${index + 1}" else "You"
     val marker = if (state.phase == RoundPhase.PLAYER_TURN && state.hands.size > 1 &&
         index == state.activeHandIndex
     ) "▶ " else ""
+    val rowKey = "hand-$index"
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
         FeltText("$marker$label (${hand.total})", fontSize = 14.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-            hand.cards.forEach { card -> PixelCard(card = card) }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(PixelCardSpacing),
+            modifier = Modifier.onGloballyPositioned { flightController.anchors[rowKey] = it.positionInRoot() }
+        ) {
+            hand.cards.forEachIndexed { cardIndex, card ->
+                if (flightController.isFlying(SlotKey(rowKey, cardIndex))) {
+                    Box(modifier = Modifier.size(PixelCardWidth, PixelCardHeight))
+                } else {
+                    PixelCard(card = card)
+                }
+            }
         }
     }
 }

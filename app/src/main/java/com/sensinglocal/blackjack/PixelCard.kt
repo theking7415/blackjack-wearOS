@@ -23,8 +23,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sensinglocal.blackjack.game.Card
 
-private val CardWidth = 34.dp
-private val CardHeight = 48.dp
+// Exposed (not private) so CardFlight.kt can size/space the deck and target slots to match.
+val PixelCardWidth = 34.dp
+val PixelCardHeight = 48.dp
+val PixelCardSpacing = 3.dp
 private const val BORDER_WIDTH = 2f
 private const val SHADOW_OFFSET = 2f
 
@@ -45,12 +47,12 @@ fun PixelCard(card: Card?, faceDown: Boolean = false, modifier: Modifier = Modif
     val density = LocalDensity.current
     val typeface = remember { vt323Typeface(context) }
     val boldTypeface = remember(typeface) { Typeface.create(typeface, Typeface.BOLD) }
-    val widthPx = with(density) { CardWidth.toPx() }
-    val heightPx = with(density) { CardHeight.toPx() }
+    val widthPx = with(density) { PixelCardWidth.toPx() }
+    val heightPx = with(density) { PixelCardHeight.toPx() }
     val bitmap = remember(card, faceDown, density) {
         renderCardBitmap(widthPx, heightPx, card, faceDown, density, boldTypeface)
     }
-    Canvas(modifier = modifier.size(CardWidth, CardHeight)) {
+    Canvas(modifier = modifier.size(PixelCardWidth, PixelCardHeight)) {
         drawImage(bitmap)
     }
 }
