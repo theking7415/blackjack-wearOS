@@ -10,7 +10,9 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
@@ -59,7 +61,8 @@ fun PixelButton(
     width: Dp = 84.dp,
     height: Dp = 40.dp,
     fontSize: TextUnit = 14.sp,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    icon: (@Composable () -> Unit)? = null
 ) {
     val haptic = LocalHapticFeedback.current
     val interactionSource = remember { MutableInteractionSource() }
@@ -89,12 +92,15 @@ fun PixelButton(
                 },
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                text = text,
-                color = if (enabled) Color.Black else Color(0xFF3A3A3A),
-                fontWeight = FontWeight.Black,
-                fontSize = fontSize
-            )
+            val labelColor = if (enabled) Color.Black else Color(0xFF3A3A3A)
+            if (icon != null) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    icon()
+                    Text(text = text, color = labelColor, fontWeight = FontWeight.Black, fontSize = fontSize)
+                }
+            } else {
+                Text(text = text, color = labelColor, fontWeight = FontWeight.Black, fontSize = fontSize)
+            }
         }
     }
 }
@@ -157,5 +163,28 @@ fun RepeatingPixelButton(
             delay(interval)
             interval = (interval - accelerationMs).coerceAtLeast(minIntervalMs)
         }
+    }
+}
+
+/** Small top-left "back" button — black square, gold border, "<" glyph — used on every
+ * secondary screen (tutorial, settings, story placeholder) to return to the main menu. */
+@Composable
+fun BackButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val haptic = LocalHapticFeedback.current
+    Box(
+        modifier = modifier
+            .size(36.dp)
+            .background(MenuBlack)
+            .border(BorderStroke(2.dp, MenuGold))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onClick()
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Text(text = "<", color = MenuGold, fontWeight = FontWeight.Black, fontSize = 18.sp)
     }
 }

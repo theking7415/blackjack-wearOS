@@ -63,7 +63,7 @@ import kotlinx.coroutines.launch
 import kotlin.math.pow
 import kotlin.random.Random
 
-private enum class AppScreen { SPLASH, MENU, GAME }
+private enum class AppScreen { SPLASH, MENU, GAME, TUTORIAL, SETTINGS, STORY_COMING_SOON }
 
 class MainActivity : ComponentActivity() {
     private val viewModel: BlackjackViewModel by viewModels()
@@ -82,12 +82,22 @@ class MainActivity : ComponentActivity() {
                         // to be revealed as the splash wipes away — no black gap while it
                         // waits for the splash to finish before it even starts building.
                         AppScreen.SPLASH, AppScreen.MENU ->
-                            MainMenuScreen(onPlay = { screen = AppScreen.GAME })
+                            MainMenuScreen(
+                                onResume = { screen = AppScreen.STORY_COMING_SOON },
+                                onNewGame = { screen = AppScreen.STORY_COMING_SOON },
+                                onQuickPlay = { screen = AppScreen.GAME },
+                                onTutorial = { screen = AppScreen.TUTORIAL },
+                                onSettings = { screen = AppScreen.SETTINGS }
+                            )
                         AppScreen.GAME -> SwipeToDismissBox(
                             onDismissed = { screen = AppScreen.MENU }
                         ) { isBackground ->
                             if (isBackground) {
-                                MainMenuScreen(onPlay = {})
+                                MainMenuScreen(
+                                    onResume = {}, onNewGame = {}, onQuickPlay = {},
+                                    onTutorial = {}, onSettings = {},
+                                    isActive = false
+                                )
                             } else {
                                 BlackjackScreen(
                                     state = viewModel.state,
@@ -99,6 +109,45 @@ class MainActivity : ComponentActivity() {
                                     onNextRound = viewModel::nextRound,
                                     onResetBankroll = viewModel::resetBankroll
                                 )
+                            }
+                        }
+                        AppScreen.TUTORIAL -> SwipeToDismissBox(
+                            onDismissed = { screen = AppScreen.MENU }
+                        ) { isBackground ->
+                            if (isBackground) {
+                                MainMenuScreen(
+                                    onResume = {}, onNewGame = {}, onQuickPlay = {},
+                                    onTutorial = {}, onSettings = {},
+                                    isActive = false
+                                )
+                            } else {
+                                TutorialScreen(onBack = { screen = AppScreen.MENU })
+                            }
+                        }
+                        AppScreen.SETTINGS -> SwipeToDismissBox(
+                            onDismissed = { screen = AppScreen.MENU }
+                        ) { isBackground ->
+                            if (isBackground) {
+                                MainMenuScreen(
+                                    onResume = {}, onNewGame = {}, onQuickPlay = {},
+                                    onTutorial = {}, onSettings = {},
+                                    isActive = false
+                                )
+                            } else {
+                                SettingsScreen(onBack = { screen = AppScreen.MENU })
+                            }
+                        }
+                        AppScreen.STORY_COMING_SOON -> SwipeToDismissBox(
+                            onDismissed = { screen = AppScreen.MENU }
+                        ) { isBackground ->
+                            if (isBackground) {
+                                MainMenuScreen(
+                                    onResume = {}, onNewGame = {}, onQuickPlay = {},
+                                    onTutorial = {}, onSettings = {},
+                                    isActive = false
+                                )
+                            } else {
+                                StoryComingSoonScreen(onBack = { screen = AppScreen.MENU })
                             }
                         }
                     }
@@ -236,7 +285,7 @@ fun BlackjackScreen(
             item {
                 val displayedBankroll = rememberAnimatedBankroll(state.bankroll)
                 EntranceFade(trigger = flightController.roundId) {
-                    FeltText("Bankroll: ₹$displayedBankroll", fontSize = 17.sp)
+                    CreditAmountRow(amount = displayedBankroll, prefix = "Bankroll:", fontSize = 17.sp)
                 }
             }
 
@@ -371,7 +420,7 @@ private fun BettingControls(bankroll: Int, onBet: (Int) -> Unit, onResetBankroll
         }
         return
     }
-    // Custom buy-in stepper instead of fixed ₹10/25/50 buttons — also fixes the low-bankroll
+    // Custom buy-in stepper instead of fixed 10/25/50-credit buttons — also fixes the low-bankroll
     // dead end where every fixed amount exceeded what was left to bet. Keyed on bankroll so a
     // fresh default is picked each time the betting screen is (re)entered, and the step size
     // scales down for a small bankroll so it's still reachable in a few taps.
@@ -380,7 +429,7 @@ private fun BettingControls(bankroll: Int, onBet: (Int) -> Unit, onResetBankroll
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         // Amount sits above the +/- row (not between the buttons) so a thumb resting on
         // either button never covers it, even while holding to fast-repeat.
-        FeltText("₹$betAmount", fontSize = 20.sp)
+        CreditAmountRow(amount = betAmount, fontSize = 20.sp)
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             RepeatingPixelButton(
                 text = "-",
@@ -391,7 +440,14 @@ private fun BettingControls(bankroll: Int, onBet: (Int) -> Unit, onResetBankroll
                 onStep = { betAmount = (betAmount + step).coerceIn(1, bankroll) }
             )
         }
-        PixelButton(text = "Bet ₹$betAmount", onClick = { onBet(betAmount) }, width = 110.dp, height = 38.dp, fontSize = 14.sp)
+        PixelButton(
+            text = "Bet $betAmount",
+            icon = { CreditIcon(size = 14.dp) },
+            onClick = { onBet(betAmount) },
+            width = 120.dp,
+            height = 38.dp,
+            fontSize = 14.sp
+        )
     }
 }
 
