@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Disables the platform-level swipe-to-dismiss so an edge swipe can never close the app
+         on its own; Compose's SwipeToDismissBox handles it per-screen instead. -->
+    <style name="Theme.Blackjack" parent="@android:style/Theme.DeviceDefault">
+        <item name="android:windowSwipeToDismiss">false</item>
+    </style>
+</resources>

@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -89,28 +90,19 @@ class MainActivity : ComponentActivity() {
                                 onTutorial = { screen = AppScreen.TUTORIAL },
                                 onSettings = { screen = AppScreen.SETTINGS }
                             )
-                        AppScreen.GAME -> SwipeToDismissBox(
-                            onDismissed = { screen = AppScreen.MENU }
-                        ) { isBackground ->
-                            if (isBackground) {
-                                MainMenuScreen(
-                                    onResume = {}, onNewGame = {}, onQuickPlay = {},
-                                    onTutorial = {}, onSettings = {},
-                                    isActive = false
-                                )
-                            } else {
-                                BlackjackScreen(
-                                    state = viewModel.state,
-                                    onBet = viewModel::placeBet,
-                                    onHit = viewModel::hit,
-                                    onStand = viewModel::stand,
-                                    onDoubleDown = viewModel::doubleDown,
-                                    onSplit = viewModel::split,
-                                    onNextRound = viewModel::nextRound,
-                                    onResetBankroll = viewModel::resetBankroll
-                                )
-                            }
-                        }
+                        // No SwipeToDismissBox here on purpose: swipe-back does nothing during
+                        // a game, so the only way out is the pause menu's "Quit to Menu".
+                        AppScreen.GAME -> BlackjackScreen(
+                            state = viewModel.state,
+                            onBet = viewModel::placeBet,
+                            onHit = viewModel::hit,
+                            onStand = viewModel::stand,
+                            onDoubleDown = viewModel::doubleDown,
+                            onSplit = viewModel::split,
+                            onNextRound = viewModel::nextRound,
+                            onResetBankroll = viewModel::resetBankroll,
+                            onQuitToMenu = { screen = AppScreen.MENU }
+                        )
                         AppScreen.TUTORIAL -> SwipeToDismissBox(
                             onDismissed = { screen = AppScreen.MENU }
                         ) { isBackground ->
@@ -240,8 +232,10 @@ fun BlackjackScreen(
     onDoubleDown: () -> Unit,
     onSplit: () -> Unit,
     onNextRound: () -> Unit,
-    onResetBankroll: () -> Unit
+    onResetBankroll: () -> Unit,
+    onQuitToMenu: () -> Unit
 ) {
+    var pauseMenuOpen by remember { mutableStateOf(false) }
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -323,6 +317,48 @@ fun BlackjackScreen(
 
         // On top of everything: the cards currently flying from the deck to their slot.
         CardFlightOverlay(controller = flightController, modifier = Modifier.fillMaxSize())
+
+        // Persistent pause button on the right edge, vertically centered — that's where the
+        // round bezel leaves the most width, and it stays clear of the top/bottom content.
+        // Opening it is purely visual and never touches game state.
+        PauseButton(
+            onClick = { pauseMenuOpen = true },
+            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 4.dp)
+        )
+
+        if (pauseMenuOpen) {
+            PauseOverlay(
+                onResume = { pauseMenuOpen = false },
+                onQuitToMenu = onQuitToMenu
+            )
+        }
+    }
+}
+
+/** Full-screen dimmed overlay shown while the game is paused. Purely visual — it never touches
+ * game state, so resuming always returns to exactly the same phase/hand. Bankroll is already
+ * persisted after every action, so there's no meaningful "save vs. don't save" distinction to
+ * offer yet — just one way out, back to the main menu. */
+@Composable
+private fun PauseOverlay(onResume: () -> Unit, onQuitToMenu: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.75f))
+            // Swallow touches so nothing behind the overlay (list scroll, hit/stand, etc.)
+            // reacts while the pause menu is open.
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {}
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            FeltText("Paused", fontSize = 18.sp)
+            PixelButton(text = "Resume", onClick = onResume, width = 120.dp, height = 38.dp, fontSize = 14.sp)
+            PixelButton(text = "Quit to Menu", onClick = onQuitToMenu, width = 148.dp, height = 38.dp, fontSize = 13.sp)
+        }
     }
 }
 

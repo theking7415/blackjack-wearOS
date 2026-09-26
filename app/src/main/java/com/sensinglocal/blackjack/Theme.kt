@@ -188,3 +188,26 @@ fun BackButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
         Text(text = "<", color = MenuGold, fontWeight = FontWeight.Black, fontSize = 18.sp)
     }
 }
+
+/** Small top-right "pause" button — same visual language as [BackButton] — persistent during
+ * a round so the player can open the pause menu without disrupting the current hand. */
+@Composable
+fun PauseButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val haptic = LocalHapticFeedback.current
+    Box(
+        modifier = modifier
+            .size(36.dp)
+            .background(MenuBlack)
+            .border(BorderStroke(2.dp, MenuGold))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onClick()
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Text(text = "II", color = MenuGold, fontWeight = FontWeight.Black, fontSize = 14.sp)
+    }
+}
