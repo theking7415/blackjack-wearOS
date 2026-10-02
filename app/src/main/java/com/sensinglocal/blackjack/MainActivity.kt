@@ -42,6 +42,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -64,7 +65,9 @@ import kotlinx.coroutines.launch
 import kotlin.math.pow
 import kotlin.random.Random
 
-private enum class AppScreen { SPLASH, MENU, GAME, TUTORIAL, SETTINGS, STORY_COMING_SOON }
+private enum class AppScreen {
+    SPLASH, MENU, GAME, TUTORIAL, SETTINGS, NEW_GAME_SLOTS, RESUME_SLOTS, STORY_SCENE
+}
 
 class MainActivity : ComponentActivity() {
     private val viewModel: BlackjackViewModel by viewModels()
@@ -76,6 +79,11 @@ class MainActivity : ComponentActivity() {
             // text style, so all Compose Text() calls app-wide pick it up automatically.
             MaterialTheme(typography = Typography(defaultFontFamily = VT323)) {
                 var screen by remember { mutableStateOf(AppScreen.SPLASH) }
+                val context = LocalContext.current
+                val saveSlots = remember { SaveSlots(context) }
+                // Whether the Story scene should play the opening cinematic (New Game) or
+                // jump straight to where the player left off (Resume).
+                var storyPlayIntro by remember { mutableStateOf(true) }
                 Box(modifier = Modifier.fillMaxSize()) {
                     when (screen) {
                         // The menu is composed (and its icon/title bitmaps baked) underneath
@@ -84,8 +92,8 @@ class MainActivity : ComponentActivity() {
                         // waits for the splash to finish before it even starts building.
                         AppScreen.SPLASH, AppScreen.MENU ->
                             MainMenuScreen(
-                                onResume = { screen = AppScreen.STORY_COMING_SOON },
-                                onNewGame = { screen = AppScreen.STORY_COMING_SOON },
+                                onResume = { screen = AppScreen.RESUME_SLOTS },
+                                onNewGame = { screen = AppScreen.NEW_GAME_SLOTS },
                                 onQuickPlay = { screen = AppScreen.GAME },
                                 onTutorial = { screen = AppScreen.TUTORIAL },
                                 onSettings = { screen = AppScreen.SETTINGS }
@@ -107,11 +115,7 @@ class MainActivity : ComponentActivity() {
                             onDismissed = { screen = AppScreen.MENU }
                         ) { isBackground ->
                             if (isBackground) {
-                                MainMenuScreen(
-                                    onResume = {}, onNewGame = {}, onQuickPlay = {},
-                                    onTutorial = {}, onSettings = {},
-                                    isActive = false
-                                )
+                                MenuBackdrop()
                             } else {
                                 TutorialScreen(onBack = { screen = AppScreen.MENU })
                             }
@@ -120,28 +124,50 @@ class MainActivity : ComponentActivity() {
                             onDismissed = { screen = AppScreen.MENU }
                         ) { isBackground ->
                             if (isBackground) {
-                                MainMenuScreen(
-                                    onResume = {}, onNewGame = {}, onQuickPlay = {},
-                                    onTutorial = {}, onSettings = {},
-                                    isActive = false
-                                )
+                                MenuBackdrop()
                             } else {
                                 SettingsScreen(onBack = { screen = AppScreen.MENU })
                             }
                         }
-                        AppScreen.STORY_COMING_SOON -> SwipeToDismissBox(
+                        AppScreen.NEW_GAME_SLOTS -> SwipeToDismissBox(
                             onDismissed = { screen = AppScreen.MENU }
                         ) { isBackground ->
                             if (isBackground) {
-                                MainMenuScreen(
-                                    onResume = {}, onNewGame = {}, onQuickPlay = {},
-                                    onTutorial = {}, onSettings = {},
-                                    isActive = false
-                                )
+                                MenuBackdrop()
                             } else {
-                                StoryComingSoonScreen(onBack = { screen = AppScreen.MENU })
+                                StorySlotsScreen(
+                                    mode = SlotMode.NEW_GAME,
+                                    saveSlots = saveSlots,
+                                    onSlotChosen = { slot ->
+                                        saveSlots.startNew(slot)
+                                        storyPlayIntro = true
+                                        screen = AppScreen.STORY_SCENE
+                                    },
+                                    onBack = { screen = AppScreen.MENU }
+                                )
                             }
                         }
+                        AppScreen.RESUME_SLOTS -> SwipeToDismissBox(
+                            onDismissed = { screen = AppScreen.MENU }
+                        ) { isBackground ->
+                            if (isBackground) {
+                                MenuBackdrop()
+                            } else {
+                                StorySlotsScreen(
+                                    mode = SlotMode.RESUME,
+                                    saveSlots = saveSlots,
+                                    onSlotChosen = {
+                                        storyPlayIntro = false
+                                        screen = AppScreen.STORY_SCENE
+                                    },
+                                    onBack = { screen = AppScreen.MENU }
+                                )
+                            }
+                        }
+                        AppScreen.STORY_SCENE -> StoryIntroScreen(
+                            playIntro = storyPlayIntro,
+                            onExit = { screen = AppScreen.MENU }
+                        )
                     }
                     if (screen == AppScreen.SPLASH) {
                         SplashScreen(onFinished = { screen = AppScreen.MENU })
@@ -150,6 +176,16 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+}
+
+/** Frozen main menu shown behind a screen while it's being swiped away. */
+@Composable
+private fun MenuBackdrop() {
+    MainMenuScreen(
+        onResume = {}, onNewGame = {}, onQuickPlay = {},
+        onTutorial = {}, onSettings = {},
+        isActive = false
+    )
 }
 
 private const val WIPE_COLUMNS = 18

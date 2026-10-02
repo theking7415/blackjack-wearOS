@@ -43,7 +43,7 @@ import kotlinx.coroutines.launch
  */
 @OptIn(androidx.wear.compose.foundation.ExperimentalWearFoundationApi::class)
 @Composable
-private fun ScrollableInfoScreen(
+internal fun ScrollableInfoScreen(
     onBack: () -> Unit,
     background: Color = MenuRedDark,
     content: ScalingLazyListScope.() -> Unit
@@ -228,26 +228,6 @@ fun SettingsScreen(onBack: () -> Unit) {
                     )
                 }
             }
-        }
-        item { Spacer(Modifier.height(28.dp)) }
-    }
-}
-
-/** Shown for Resume/New Game until Story Mode actually exists — see the project CLAUDE.md
- * checklist for the (large) list of unresolved Story Mode design questions. */
-@Composable
-fun StoryComingSoonScreen(onBack: () -> Unit) {
-    ScrollableInfoScreen(onBack = onBack) {
-        item { Spacer(Modifier.height(70.dp)) }
-        item { ScreenTitle("Story Mode") }
-        item {
-            Text(
-                text = "Coming soon — the casino career is still being written.",
-                color = Color.White,
-                fontSize = 13.sp,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(horizontal = 30.dp, vertical = 8.dp)
-            )
         }
         item { Spacer(Modifier.height(28.dp)) }
     }
