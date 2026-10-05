@@ -33,7 +33,13 @@ class BlackjackEngineTest {
         val engine = newEngine(bankroll = 500)
         engine.placeBet(50)
 
-        assertEquals(450, engine.state.bankroll)
+        // ~5% of deals are a natural blackjack, which settles at once: 575 (3:2 win) or 500
+        // (push against a dealer natural). Otherwise the bet is simply held out of the bankroll.
+        if (engine.state.phase == RoundPhase.PLAYER_TURN) {
+            assertEquals(450, engine.state.bankroll)
+        } else {
+            assertTrue(engine.state.bankroll == 575 || engine.state.bankroll == 500)
+        }
         assertEquals(1, engine.state.hands.size)
         assertEquals(2, engine.state.hands[0].cards.size)
         assertEquals(50, engine.state.hands[0].bet)
@@ -168,7 +174,8 @@ class BlackjackEngineTest {
 
     @Test
     fun `split creates two independent hands from a pair`() {
-        val engine = engineWithStartingPair()
+        // Non-ace pair: split aces settle immediately, which would change the bankroll asserted below.
+        val engine = engineWithStartingPair(Rank.EIGHT)
         engine.split()
 
         assertEquals(2, engine.state.hands.size)
