@@ -75,6 +75,11 @@ class BlackjackEngine(startingBankroll: Int) {
     var state = BlackjackState(bankroll = startingBankroll)
         private set
 
+    /** Replaces the whole engine state, e.g. when resuming a saved Story Mode hand. */
+    fun restore(saved: BlackjackState) {
+        state = saved
+    }
+
     fun resetBankroll(amount: Int) {
         state = BlackjackState(bankroll = amount)
     }

@@ -6,9 +6,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -62,7 +64,8 @@ fun PixelButton(
     height: Dp = 40.dp,
     fontSize: TextUnit = 14.sp,
     enabled: Boolean = true,
-    icon: (@Composable () -> Unit)? = null
+    icon: (@Composable () -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null
 ) {
     val haptic = LocalHapticFeedback.current
     val interactionSource = remember { MutableInteractionSource() }
@@ -82,14 +85,42 @@ fun PixelButton(
                 .offset(x = pressOffset, y = pressOffset)
                 .background(if (enabled) MenuRed else MenuRedDark)
                 .border(BorderStroke(2.dp, MenuGold))
-                .clickable(
-                    interactionSource = interactionSource,
-                    indication = null,
-                    enabled = enabled
-                ) {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    onClick()
-                },
+                .then(
+                    if (onLongClick == null) {
+                        Modifier.clickable(
+                            interactionSource = interactionSource,
+                            indication = null,
+                            enabled = enabled
+                        ) {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onClick()
+                        }
+                    } else {
+                        // clickable has no long-press hook, so drive the press state by hand.
+                        Modifier.pointerInput(enabled) {
+                            if (!enabled) return@pointerInput
+                            detectTapGestures(
+                                onPress = { offset ->
+                                    val press = PressInteraction.Press(offset)
+                                    interactionSource.emit(press)
+                                    val released = tryAwaitRelease()
+                                    interactionSource.emit(
+                                        if (released) PressInteraction.Release(press)
+                                        else PressInteraction.Cancel(press)
+                                    )
+                                },
+                                onTap = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onClick()
+                                },
+                                onLongPress = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onLongClick()
+                                }
+                            )
+                        }
+                    }
+                ),
             contentAlignment = Alignment.Center
         ) {
             val labelColor = if (enabled) Color.Black else Color(0xFF3A3A3A)

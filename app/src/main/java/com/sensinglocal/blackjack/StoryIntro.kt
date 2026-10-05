@@ -84,7 +84,7 @@ private val LampLight = Color(0xFFFFE08A)
  * frame. A back button appears once the scene has settled.
  */
 @Composable
-fun StoryIntroScreen(playIntro: Boolean, onExit: () -> Unit) {
+fun StoryIntroScreen(playIntro: Boolean, onSettled: () -> Unit, onExit: () -> Unit) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         val density = LocalDensity.current
         val widthPx = with(density) { maxWidth.roundToPx() }
@@ -130,6 +130,7 @@ fun StoryIntroScreen(playIntro: Boolean, onExit: () -> Unit) {
                 pan.animateTo(1f, tween(6000, easing = FastOutSlowInEasing))
             }
             showBack = true
+            onSettled()
             backAlpha.animateTo(1f, tween(800))
         }
 

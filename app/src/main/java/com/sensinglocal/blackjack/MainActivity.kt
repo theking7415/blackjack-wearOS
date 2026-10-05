@@ -84,6 +84,7 @@ class MainActivity : ComponentActivity() {
                 // Whether the Story scene should play the opening cinematic (New Game) or
                 // jump straight to where the player left off (Resume).
                 var storyPlayIntro by remember { mutableStateOf(true) }
+                var storySlot by remember { mutableStateOf(1) }
                 Box(modifier = Modifier.fillMaxSize()) {
                     when (screen) {
                         // The menu is composed (and its icon/title bitmaps baked) underneath
@@ -140,6 +141,7 @@ class MainActivity : ComponentActivity() {
                                     saveSlots = saveSlots,
                                     onSlotChosen = { slot ->
                                         saveSlots.startNew(slot)
+                                        storySlot = slot
                                         storyPlayIntro = true
                                         screen = AppScreen.STORY_SCENE
                                     },
@@ -156,8 +158,11 @@ class MainActivity : ComponentActivity() {
                                 StorySlotsScreen(
                                     mode = SlotMode.RESUME,
                                     saveSlots = saveSlots,
-                                    onSlotChosen = {
-                                        storyPlayIntro = false
+                                    onSlotChosen = { slot ->
+                                        storySlot = slot
+                                        // Quit mid-cutscene -> the save is still "before the cutscene", so replay it.
+                                        storyPlayIntro = saveSlots.load(slot)?.checkpoint ==
+                                            Checkpoint.BeforeCutscene(OPENING_CUTSCENE_ID)
                                         screen = AppScreen.STORY_SCENE
                                     },
                                     onBack = { screen = AppScreen.MENU }
@@ -166,6 +171,19 @@ class MainActivity : ComponentActivity() {
                         }
                         AppScreen.STORY_SCENE -> StoryIntroScreen(
                             playIntro = storyPlayIntro,
+                            onSettled = {
+                                // Cutscene only counts as seen once it has finished playing.
+                                val save = saveSlots.load(storySlot)
+                                if (save != null && save.checkpoint == Checkpoint.BeforeCutscene(OPENING_CUTSCENE_ID)) {
+                                    saveSlots.save(
+                                        storySlot,
+                                        save.copy(
+                                            completedCutscenes = save.completedCutscenes + OPENING_CUTSCENE_ID,
+                                            checkpoint = Checkpoint.Street
+                                        )
+                                    )
+                                }
+                            },
                             onExit = { screen = AppScreen.MENU }
                         )
                     }
