@@ -1,14 +1,17 @@
 package com.sensinglocal.blackjack
 
-import com.sensinglocal.blackjack.game.BlackjackState
 import com.sensinglocal.blackjack.game.Card
-import com.sensinglocal.blackjack.game.Deck
 import com.sensinglocal.blackjack.game.HandStatus
-import com.sensinglocal.blackjack.game.PlayerHand
 import com.sensinglocal.blackjack.game.Rank
-import com.sensinglocal.blackjack.game.RoundPhase
 import com.sensinglocal.blackjack.game.RoundResult
 import com.sensinglocal.blackjack.game.Suit
+import com.sensinglocal.blackjack.game.table.Seat
+import com.sensinglocal.blackjack.game.table.SeatKind
+import com.sensinglocal.blackjack.game.table.Shoe
+import com.sensinglocal.blackjack.game.table.StyleProfile
+import com.sensinglocal.blackjack.game.table.TableHand
+import com.sensinglocal.blackjack.game.table.TablePhase
+import com.sensinglocal.blackjack.game.table.TableState
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -18,38 +21,13 @@ enum class CurrencyTier { CREDITS, SILVER_COINS, GOLD_BARS }
 const val OPENING_CUTSCENE_ID = "opening"
 const val STARTING_STORY_BANKROLL = 50L
 
-/** A mid-round table state, including the exact undealt deck order so resuming can't re-roll it. */
-data class HandSnapshot(
-    val phase: RoundPhase,
-    val hands: List<PlayerHand>,
-    val activeHandIndex: Int,
-    val dealerCards: List<Card>,
-    val deck: List<Card>
-) {
-    /** Bankroll is passed in (not stored here) because [StorySave.bankroll] is the single source. */
-    fun toState(bankroll: Long) = BlackjackState(
-        bankroll = bankroll.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(),
-        deck = Deck.fromSnapshot(deck),
-        hands = hands,
-        activeHandIndex = activeHandIndex,
-        dealerCards = dealerCards,
-        phase = phase
-    )
-
-    companion object {
-        fun from(state: BlackjackState) = HandSnapshot(
-            phase = state.phase,
-            hands = state.hands,
-            activeHandIndex = state.activeHandIndex,
-            dealerCards = state.dealerCards,
-            deck = state.deck.snapshot()
-        )
-    }
-}
-
 /**
  * Where Resume should drop the player. Save rules (decided 2026-10-05):
- * - [InHand]: the exact hand, deck order included, written after every action.
+ * - [AtTable]: the whole table — every seat's stack and hands, the dealer, the exact undealt shoe
+ *   order, the house pool, whose turn it is, the round number and script cursor — written after
+ *   every action. Covers mid-hand, between hands (BETTING) and the results screen (ROUND_OVER).
+ *   The table's *config* (seats' characters, scripts, minimum bet...) is static story data rebuilt
+ *   from [StorySave.casino]/[StorySave.table], not saved.
  * - [BeforeCutscene]: written when a cutscene *starts*; the cutscene only counts as seen (added
  *   to [StorySave.completedCutscenes], checkpoint advanced) once it finishes or is skipped, so
  *   quitting partway replays it.
@@ -60,12 +38,17 @@ sealed interface Checkpoint {
     data object BuyIn : Checkpoint
     data object Street : Checkpoint
     data class BeforeCutscene(val cutsceneId: String) : Checkpoint
-    data class InHand(val hand: HandSnapshot) : Checkpoint
+    data class AtTable(val table: TableState) : Checkpoint
 }
 
 data class StorySave(
     val currencyTier: CurrencyTier,
-    /** Long, not Int: Credits climb toward 1,000,000,000 before the reset, and 3:2 payouts overshoot Int. */
+    /**
+     * The player's money **off the table**. Sitting down moves the chosen buy-in into the human seat's
+     * stack (inside [Checkpoint.AtTable]); leaving returns what's left. So while at a table this is
+     * not the whole fortune. Long, not Int: Credits climb toward 1,000,000,000 before the reset, and
+     * 3:2 payouts overshoot Int.
+     */
     val bankroll: Long,
     val casino: Int,
     val table: Int,
@@ -91,12 +74,14 @@ data class StorySave(
 }
 
 /**
- * JSON (de)serialization for [StorySave]. Versioned so later schema changes (e.g. the
- * multiplayer-table engine) can migrate or cleanly reject old saves; [decode] returns null for
- * anything corrupt or from an unknown version rather than throwing.
+ * JSON (de)serialization for [StorySave]. Versioned so schema changes can migrate or cleanly
+ * reject old saves; [decode] returns null for anything corrupt or from an unknown version rather
+ * than throwing. Version 2 replaced the single-hand snapshot with the whole table ([Checkpoint.AtTable]);
+ * v1 saves still load (their buy-in/cutscene/street checkpoints are unchanged), except a v1 in-hand
+ * checkpoint, which never shipped and reads as an unreadable save.
  */
 object StorySaveCodec {
-    const val VERSION = 1
+    const val VERSION = 2
 
     fun encode(save: StorySave): String = JSONObject().apply {
         put("version", VERSION)
@@ -110,7 +95,7 @@ object StorySaveCodec {
 
     fun decode(text: String): StorySave? = try {
         val o = JSONObject(text)
-        if (o.getInt("version") != VERSION) {
+        if (o.getInt("version") !in 1..VERSION) {
             null
         } else {
             StorySave(
@@ -134,9 +119,9 @@ object StorySaveCodec {
                 put("type", "beforeCutscene")
                 put("cutsceneId", c.cutsceneId)
             }
-            is Checkpoint.InHand -> {
-                put("type", "inHand")
-                put("hand", encodeHand(c.hand))
+            is Checkpoint.AtTable -> {
+                put("type", "atTable")
+                put("table", encodeTable(c.table))
             }
         }
     }
@@ -145,45 +130,75 @@ object StorySaveCodec {
         "buyIn" -> Checkpoint.BuyIn
         "street" -> Checkpoint.Street
         "beforeCutscene" -> Checkpoint.BeforeCutscene(o.getString("cutsceneId"))
-        "inHand" -> Checkpoint.InHand(decodeHand(o.getJSONObject("hand")))
+        "atTable" -> Checkpoint.AtTable(decodeTable(o.getJSONObject("table")))
         else -> throw IllegalArgumentException("Unknown checkpoint type: $type")
     }
 
-    private fun encodeHand(h: HandSnapshot) = JSONObject().apply {
-        put("phase", h.phase.name)
-        put("activeHandIndex", h.activeHandIndex)
-        put("dealerCards", encodeCards(h.dealerCards))
-        put("deck", encodeCards(h.deck))
+    private fun encodeTable(t: TableState) = JSONObject().apply {
+        put("phase", t.phase.name)
+        put("activeSeat", t.activeSeat)
+        put("activeHandIndex", t.activeHandIndex)
+        put("round", t.round)
+        put("house", t.house)
+        put("grabbed", t.grabbed)
+        put("dealerCards", encodeCards(t.dealerCards))
+        put("shoe", encodeCards(t.shoe.snapshot()))
+        put("scriptCursor", JSONObject().apply { t.scriptCursor.forEach { (seat, used) -> put(seat.toString(), used) } })
+        put("seats", JSONArray().apply { t.seats.forEach { put(encodeSeat(it)) } })
+    }
+
+    private fun decodeTable(o: JSONObject): TableState {
+        val seatsJson = o.getJSONArray("seats")
+        val cursor = o.getJSONObject("scriptCursor")
+        return TableState(
+            seats = List(seatsJson.length()) { decodeSeat(seatsJson.getJSONObject(it)) },
+            shoe = Shoe.of(decodeCards(o.getJSONArray("shoe"))),
+            house = o.getLong("house"),
+            dealerCards = decodeCards(o.getJSONArray("dealerCards")),
+            phase = TablePhase.valueOf(o.getString("phase")),
+            activeSeat = o.getInt("activeSeat"),
+            activeHandIndex = o.getInt("activeHandIndex"),
+            round = o.getInt("round"),
+            scriptCursor = cursor.keys().asSequence().associate { it.toInt() to cursor.getInt(it) },
+            grabbed = o.getBoolean("grabbed")
+        )
+    }
+
+    private fun encodeSeat(s: Seat) = JSONObject().apply {
+        put("kind", s.kind.name)
+        put("stack", s.stack)
+        put("betPercent", s.style.betPercent)
         put("hands", JSONArray().apply {
-            h.hands.forEach { hand ->
+            s.hands.forEach { hand ->
                 put(JSONObject().apply {
                     put("cards", encodeCards(hand.cards))
                     put("bet", hand.bet)
                     put("status", hand.status.name)
                     put("fromSplit", hand.fromSplit)
                     hand.result?.let { put("result", it.name) }
+                    put("paid", hand.paid)
                 })
             }
         })
     }
 
-    private fun decodeHand(o: JSONObject): HandSnapshot {
+    private fun decodeSeat(o: JSONObject): Seat {
         val handsJson = o.getJSONArray("hands")
-        return HandSnapshot(
-            phase = RoundPhase.valueOf(o.getString("phase")),
+        return Seat(
+            kind = SeatKind.valueOf(o.getString("kind")),
+            stack = o.getLong("stack"),
             hands = List(handsJson.length()) { i ->
                 val hand = handsJson.getJSONObject(i)
-                PlayerHand(
+                TableHand(
                     cards = decodeCards(hand.getJSONArray("cards")),
-                    bet = hand.getInt("bet"),
+                    bet = hand.getLong("bet"),
                     status = HandStatus.valueOf(hand.getString("status")),
                     fromSplit = hand.getBoolean("fromSplit"),
-                    result = if (hand.has("result")) RoundResult.valueOf(hand.getString("result")) else null
+                    result = if (hand.has("result")) RoundResult.valueOf(hand.getString("result")) else null,
+                    paid = hand.getLong("paid")
                 )
             },
-            activeHandIndex = o.getInt("activeHandIndex"),
-            dealerCards = decodeCards(o.getJSONArray("dealerCards")),
-            deck = decodeCards(o.getJSONArray("deck"))
+            style = StyleProfile(o.getInt("betPercent"))
         )
     }
 

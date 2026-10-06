@@ -41,6 +41,17 @@ class TableEngine(
     )
         private set
 
+    /**
+     * Resumes a saved table. [saved] must be for this config's table (same seats, in order); the
+     * script and everything else static still comes from the config.
+     */
+    fun restore(saved: TableState) {
+        require(saved.seats.map { it.kind } == config.seats.map { it.kind }) {
+            "Saved table doesn't match this table's seats"
+        }
+        state = saved
+    }
+
     private val log = mutableListOf<TableEvent>()
 
     private fun emit(event: TableEvent) {

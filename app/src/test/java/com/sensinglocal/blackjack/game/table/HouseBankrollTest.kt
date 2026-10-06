@@ -132,7 +132,11 @@ class HouseBankrollTest {
 
     @Test
     fun `an unlimited-house table never goes broke from one round`() {
-        val e = TableEngine(TableConfig.singlePlayer(100), initialShoe = Shoe.of(WIN.map(::card)))
+        // reshuffleBelow = 0 keeps the rigged 4-card shoe (the default would swap it for a random one).
+        val e = TableEngine(
+            TableConfig.singlePlayer(100).copy(reshuffleBelow = 0),
+            initialShoe = Shoe.of(WIN.map(::card))
+        )
         e.placeBet(10); e.stand()
         assertFalse(e.state.houseBroke)
     }

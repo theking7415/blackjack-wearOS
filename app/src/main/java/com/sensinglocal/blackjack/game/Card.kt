@@ -37,14 +37,6 @@ class Deck(shoeCount: Int = 1) {
     }
 
     fun remaining(): Int = cards.size
-
-    /** The undealt cards in draw order (next card first), for saving a hand mid-round. */
-    fun snapshot(): List<Card> = cards.toList()
-
-    companion object {
-        /** Rebuilds a deck from [snapshot] output, preserving the exact draw order. */
-        fun fromSnapshot(order: List<Card>): Deck = Deck(shoeCount = 0).also { it.cards.addAll(order) }
-    }
 }
 
 /** Returns best hand total (accounting for soft aces) and whether that total is soft. */
