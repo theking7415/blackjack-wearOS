@@ -22,8 +22,11 @@ import kotlin.random.Random
  * false (the human's turn, or the round is over). AI seats play [BasicStrategy] and bet a
  * percentage of their stack ([StyleProfile.betPercent]); one under the table minimum sits out.
  *
- * Still to come (see CLAUDE.md, "Multiplayer table engine design"): events (step 5), scripting
- * and grab-all (step 6).
+ * Every action returns the [TableEvent]s it caused, in order, for paced playback and speech
+ * bubbles ([step] returns an empty list when there was no AI turn to play). The state is still
+ * the source of truth; events only describe what happened.
+ *
+ * Still to come (see CLAUDE.md, "Multiplayer table engine design"): scripting and grab-all (step 6).
  */
 class TableEngine(
     private val config: TableConfig,
@@ -37,7 +40,22 @@ class TableEngine(
     )
         private set
 
-    fun placeBet(amount: Long) {
+    private val log = mutableListOf<TableEvent>()
+
+    private fun emit(event: TableEvent) {
+        log.add(event)
+    }
+
+    /** Runs [block], returning every event it emitted. */
+    private fun recording(block: () -> Unit): List<TableEvent> {
+        log.clear()
+        block()
+        return log.toList()
+    }
+
+    fun placeBet(amount: Long): List<TableEvent> = recording { doPlaceBet(amount) }
+
+    private fun doPlaceBet(amount: Long) {
         check(state.phase == TablePhase.BETTING) { "Not the betting phase" }
         check(!state.houseBroke) { "The house is broke; this table is over" }
         val seatIndex = state.humanSeatIndex
@@ -46,7 +64,10 @@ class TableEngine(
         require(amount >= minOf(config.minBet, stack)) { "Bet is below the table minimum" }
 
         var shoe = state.shoe
-        if (shoe.remaining < config.reshuffleBelow) shoe = Shoe.fresh(config.shoeCount, random)
+        if (shoe.remaining < config.reshuffleBelow) {
+            shoe = Shoe.fresh(config.shoeCount, random)
+            emit(TableEvent.ShoeReshuffled)
+        }
 
         // Only seats with a bet get cards: the human, plus every AI seat that can afford the minimum.
         val bets = buildMap<Int, Long> {
@@ -55,21 +76,25 @@ class TableEngine(
                 if (bet != null) put(i, bet)
             }
         }
+        for (i in bets.keys.sorted()) emit(TableEvent.BetPlaced(i, bets.getValue(i)))
         val dealt = bets.keys.associateWith { mutableListOf<Card>() }
         val dealer = mutableListOf<Card>()
-        repeat(2) {
+        repeat(2) { round ->
             for (i in bets.keys.sorted()) {
                 val (card, next) = shoe.draw(); shoe = next
                 dealt.getValue(i).add(card)
+                emit(TableEvent.SeatCardDealt(i, 0, card))
             }
             val (card, next) = shoe.draw(); shoe = next
             dealer.add(card)
+            emit(TableEvent.DealerCardDealt(card, faceDown = round == 1))
         }
 
         val seats = state.seats.mapIndexed { i, seat ->
             val bet = bets[i] ?: return@mapIndexed seat
             val cards = dealt.getValue(i)
             val status = if (isBlackjack(cards)) HandStatus.STOOD else HandStatus.PLAYING
+            if (status == HandStatus.STOOD) emit(TableEvent.Natural(i))
             seat.copy(stack = seat.stack - bet, hands = listOf(TableHand(cards, bet, status)))
         }
         state = state.copy(
@@ -83,15 +108,18 @@ class TableEngine(
         advance()
     }
 
-    fun hit() = applyHit(SeatKind.HUMAN)
-    fun stand() = applyStand(SeatKind.HUMAN)
-    fun doubleDown() = applyDoubleDown(SeatKind.HUMAN)
-    fun split() = applySplit(SeatKind.HUMAN)
+    fun hit(): List<TableEvent> = recording { applyHit(SeatKind.HUMAN) }
+    fun stand(): List<TableEvent> = recording { applyStand(SeatKind.HUMAN) }
+    fun doubleDown(): List<TableEvent> = recording { applyDoubleDown(SeatKind.HUMAN) }
+    fun split(): List<TableEvent> = recording { applySplit(SeatKind.HUMAN) }
 
-    /** Plays one action for the AI seat whose turn it is. False if it isn't an AI's turn. */
-    fun step(): Boolean {
-        if (state.phase != TablePhase.SEAT_TURN) return false
-        if (state.seats[state.activeSeat].kind != SeatKind.AI) return false
+    /**
+     * Plays one action for the AI seat whose turn it is. Returns what happened, or an empty list
+     * if it isn't an AI's turn (the human's turn, or no round in progress).
+     */
+    fun step(): List<TableEvent> = recording {
+        if (state.phase != TablePhase.SEAT_TURN) return@recording
+        if (state.seats[state.activeSeat].kind != SeatKind.AI) return@recording
         val hand = checkNotNull(state.activeHand) { "No active hand" }
         when (BasicStrategy.decide(hand, state.dealerCards.first(), state.canDoubleDown, state.canSplit)) {
             TableAction.HIT -> applyHit(SeatKind.AI)
@@ -99,7 +127,6 @@ class TableEngine(
             TableAction.DOUBLE -> applyDoubleDown(SeatKind.AI)
             TableAction.SPLIT -> applySplit(SeatKind.AI)
         }
-        return true
     }
 
     private fun aiBet(seat: Seat): Long? {
@@ -109,15 +136,21 @@ class TableEngine(
 
     private fun applyHit(kind: SeatKind) {
         val (seatIndex, hand) = activeHand(kind)
+        emit(TableEvent.ActionTaken(seatIndex, state.activeHandIndex, TableAction.HIT))
         val (card, shoe) = state.shoe.draw()
+        emit(TableEvent.SeatCardDealt(seatIndex, state.activeHandIndex, card))
         val cards = hand.cards + card
         val status = if (isBust(cards)) HandStatus.BUST else hand.status
         state = state.copy(shoe = shoe, seats = replaceActiveHand(seatIndex, hand.copy(cards = cards, status = status)))
-        if (status == HandStatus.BUST) advance()
+        if (status == HandStatus.BUST) {
+            emit(TableEvent.Bust(seatIndex, state.activeHandIndex))
+            advance()
+        }
     }
 
     private fun applyStand(kind: SeatKind) {
         val (seatIndex, hand) = activeHand(kind)
+        emit(TableEvent.ActionTaken(seatIndex, state.activeHandIndex, TableAction.STAND))
         state = state.copy(seats = replaceActiveHand(seatIndex, hand.copy(status = HandStatus.STOOD)))
         advance()
     }
@@ -127,9 +160,13 @@ class TableEngine(
         require(hand.cards.size == 2) { "Can only double down on the first two cards" }
         require(state.seats[seatIndex].stack >= hand.bet) { "Not enough stack to double down" }
 
+        emit(TableEvent.ActionTaken(seatIndex, state.activeHandIndex, TableAction.DOUBLE))
+        emit(TableEvent.BetPlaced(seatIndex, hand.bet))
         val (card, shoe) = state.shoe.draw()
+        emit(TableEvent.SeatCardDealt(seatIndex, state.activeHandIndex, card))
         val cards = hand.cards + card
         val status = if (isBust(cards)) HandStatus.BUST else HandStatus.STOOD
+        if (status == HandStatus.BUST) emit(TableEvent.Bust(seatIndex, state.activeHandIndex))
         val doubled = hand.copy(cards = cards, bet = hand.bet * 2, status = status)
         val seats = replaceActiveHand(seatIndex, doubled).mapIndexed { i, seat ->
             if (i == seatIndex) seat.copy(stack = seat.stack - hand.bet) else seat
@@ -145,8 +182,12 @@ class TableEngine(
         require(hand.cards.size == 2 && hand.cards[0].rank == hand.cards[1].rank) { "Can only split a pair" }
         require(seat.stack >= hand.bet) { "Not enough stack to split" }
 
+        emit(TableEvent.ActionTaken(seatIndex, state.activeHandIndex, TableAction.SPLIT))
+        emit(TableEvent.BetPlaced(seatIndex, hand.bet))
         val (card1, shoe1) = state.shoe.draw()
         val (card2, shoe2) = shoe1.draw()
+        emit(TableEvent.SeatCardDealt(seatIndex, 0, card1))
+        emit(TableEvent.SeatCardDealt(seatIndex, 1, card2))
         // Split aces: one more card each, then they must stand (standard casino rule).
         val status = if (hand.cards[0].rank == Rank.ACE) HandStatus.STOOD else HandStatus.PLAYING
         val hands = listOf(
@@ -195,6 +236,7 @@ class TableEngine(
             val handIndex = seat.hands.indexOfFirst { it.status == HandStatus.PLAYING }
             if (handIndex >= 0) {
                 state = state.copy(activeSeat = seatIndex, activeHandIndex = handIndex)
+                emit(TableEvent.TurnStarted(seatIndex, handIndex))
                 return
             }
         }
@@ -208,6 +250,7 @@ class TableEngine(
         val needsDealerPlay = allHands.any { it.status != HandStatus.BUST && !it.isNaturalBlackjack }
         var dealer = state.dealerCards
         var shoe = state.shoe
+        emit(TableEvent.HoleCardRevealed(dealer[1]))
         if (needsDealerPlay) {
             while (true) {
                 val (total, soft) = handValue(dealer)
@@ -215,12 +258,14 @@ class TableEngine(
                 if (total > 17 || (total == 17 && !soft)) break // hits soft 17
                 val (card, next) = shoe.draw(); shoe = next
                 dealer = dealer + card
+                emit(TableEvent.DealerCardDealt(card, faceDown = false))
             }
         }
 
         val dealerBlackjack = dealer.size == 2 && isBlackjack(dealer)
         val dealerTotal = handValue(dealer).first
         val dealerBust = isBust(dealer)
+        if (dealerBust) emit(TableEvent.DealerBust(dealerTotal))
 
         val judged = state.seats.map { seat ->
             seat.hands.map { hand ->
@@ -259,5 +304,15 @@ class TableEngine(
             seats = seats, shoe = shoe, house = house,
             dealerCards = dealer, phase = TablePhase.ROUND_OVER
         )
+
+        for ((i, seat) in seats.withIndex()) {
+            for ((h, hand) in seat.hands.withIndex()) {
+                emit(TableEvent.HandSettled(i, h, checkNotNull(hand.result), hand.bet, hand.paid, hand.fullPayout))
+            }
+        }
+        for ((i, seat) in seats.withIndex()) {
+            if (seat.hands.isNotEmpty() && seat.stack == 0L) emit(TableEvent.SeatBrokeOut(i))
+        }
+        if (state.houseBroke) emit(TableEvent.HouseBroke)
     }
 }

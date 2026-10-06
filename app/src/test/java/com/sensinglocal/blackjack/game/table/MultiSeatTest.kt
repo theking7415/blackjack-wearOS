@@ -136,9 +136,9 @@ class MultiSeatTest {
         val e = engine(listOf(ai(), human()), "10S", "9H", "10C", "7S", "8H", "7C")
         e.placeBet(10)
         assertEquals(0, e.state.activeSeat)
-        assertTrue(e.step()) // AI stands
+        assertTrue(e.step().isNotEmpty()) // AI stands
         assertEquals(1, e.state.activeSeat)
-        assertFalse(e.step()) // human's turn: nothing to do
+        assertTrue(e.step().isEmpty()) // human's turn: nothing to do
         assertEquals(1, e.state.activeSeat)
     }
 
@@ -153,14 +153,14 @@ class MultiSeatTest {
     fun `step cannot make the human's move`() {
         val e = engine(listOf(human()), "10S", "9H", "7D", "8C")
         e.placeBet(10)
-        assertFalse(e.step())
+        assertTrue(e.step().isEmpty())
         e.stand(); e.stand()
     }
 
     @Test
     fun `step does nothing outside a seat turn`() {
         val e = engine(listOf(ai(), human()), "10S", "9H", "10C", "7S", "8H", "7C")
-        assertFalse(e.step()) // betting
+        assertTrue(e.step().isEmpty()) // betting
     }
 
     @Test
@@ -168,10 +168,10 @@ class MultiSeatTest {
         // AI: 10+6 = 16 vs dealer 10 -> hit, draws the 4 -> 20, then stands.
         val e = engine(listOf(ai(), human()), "10S", "9H", "10C", "6S", "8H", "7C", "4D")
         e.placeBet(10)
-        assertTrue(e.step())
+        assertTrue(e.step().isNotEmpty())
         assertEquals(3, e.seat(0).hands[0].cards.size)
         assertEquals(20, e.seat(0).hands[0].total)
-        assertTrue(e.step()) // 20 -> stand
+        assertTrue(e.step().isNotEmpty()) // 20 -> stand
         assertEquals(1, e.state.activeSeat)
     }
 
@@ -180,7 +180,7 @@ class MultiSeatTest {
         // AI: 8+8 splits (always), each draws a card. Human then just stands.
         val e = engine(listOf(ai(), human()), "8S", "9H", "10C", "8D", "8H", "7C", "3S", "10D")
         e.placeBet(10)
-        assertTrue(e.step())
+        assertTrue(e.step().isNotEmpty())
         assertEquals(2, e.seat(0).hands.size)
         assertTrue(e.seat(0).hands.all { it.fromSplit })
         assertEquals(80L, e.seat(0).stack) // bet 10 + split bet 10 from 100
@@ -191,7 +191,7 @@ class MultiSeatTest {
         val e = engine(listOf(ai(), human()), "AS", "9H", "10C", "KS", "8H", "7C")
         e.placeBet(10)
         assertEquals(1, e.state.activeSeat) // AI seat 0 already has a natural
-        assertFalse(e.step())
+        assertTrue(e.step().isEmpty())
     }
 
     // --- settlement across seats ------------------------------------------------------------
@@ -201,7 +201,7 @@ class MultiSeatTest {
         // AI 10+8 = 18 stands and wins; human 10+6 = 16 stands and loses; dealer 10+7 = 17.
         val e = engine(listOf(ai(), human()), "10S", "10H", "10C", "8S", "6H", "7C")
         e.placeBet(10)
-        while (e.step()) Unit
+        while (e.step().isNotEmpty()) Unit
         e.stand()
         assertEquals(RoundResult.PLAYER_WIN, e.seat(0).hands[0].result)
         assertEquals(RoundResult.DEALER_WIN, e.seat(1).hands[0].result)
@@ -215,7 +215,7 @@ class MultiSeatTest {
         // Both win with 18 vs dealer 17, but the house only has 10 to pay out.
         val e = engine(listOf(ai(), human()), "10S", "10H", "10C", "8S", "8H", "7C", house = 10)
         e.placeBet(10)
-        while (e.step()) Unit
+        while (e.step().isNotEmpty()) Unit
         e.stand()
         assertEquals(20L, e.seat(1).hands[0].paid) // human: stake + full 10
         assertEquals(10L, e.seat(0).hands[0].paid) // AI: stake only, the house is empty
@@ -233,7 +233,7 @@ class MultiSeatTest {
             "10S", "9H", "10C", "8H"
         )
         e.placeBet(10)
-        while (e.step()) Unit
+        while (e.step().isNotEmpty()) Unit
         e.stand()
         assertEquals(0L, e.seat(0).stack)
         e.startNextRound()
@@ -258,7 +258,7 @@ class MultiSeatTest {
         while (rounds < 300 && e.state.humanSeat.stack > 0 && !e.state.houseBroke) {
             e.placeBet(minOf(10L, e.state.humanSeat.stack))
             while (e.state.phase == TablePhase.SEAT_TURN) {
-                if (e.step()) continue
+                if (e.step().isNotEmpty()) continue
                 val hand = e.state.activeHand!!
                 when (BasicStrategy.decide(hand, e.state.dealerCards.first(), e.state.canDoubleDown, e.state.canSplit)) {
                     TableAction.HIT -> e.hit()
