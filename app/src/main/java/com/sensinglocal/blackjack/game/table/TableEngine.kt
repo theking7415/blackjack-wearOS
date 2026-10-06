@@ -32,12 +32,14 @@ class TableEngine(
 
     var state: TableState = TableState(
         seats = config.seats.map { Seat(it.kind, it.stack) },
-        shoe = initialShoe ?: Shoe.fresh(config.shoeCount, random)
+        shoe = initialShoe ?: Shoe.fresh(config.shoeCount, random),
+        house = config.houseBankroll
     )
         private set
 
     fun placeBet(amount: Long) {
         check(state.phase == TablePhase.BETTING) { "Not the betting phase" }
+        check(!state.houseBroke) { "The house is broke; this table is over" }
         val seatIndex = state.humanSeatIndex
         require(amount in 1..state.seats[seatIndex].stack) { "Bet must be between 1 and current stack" }
 
@@ -188,8 +190,8 @@ class TableEngine(
         val dealerTotal = handValue(dealer).first
         val dealerBust = isBust(dealer)
 
-        val seats = state.seats.map { seat ->
-            val hands = seat.hands.map { hand ->
+        val judged = state.seats.map { seat ->
+            seat.hands.map { hand ->
                 hand.copy(
                     result = when {
                         hand.status == HandStatus.BUST -> RoundResult.PLAYER_BUST
@@ -203,16 +205,27 @@ class TableEngine(
                     }
                 )
             }
-            seat.copy(stack = seat.stack + hands.sumOf { payoutFor(it) }, hands = hands)
         }
 
-        state = state.copy(seats = seats, shoe = shoe, dealerCards = dealer, phase = TablePhase.ROUND_OVER)
-    }
+        // The house collects every losing bet first, then pays winnings out of that pool. If it
+        // runs dry it pays what it has, in settlement order (human seat first). A returned stake
+        // is the seat's own money and never touches the pool.
+        var house = state.house + judged.sumOf { hands -> hands.filter { it.lost }.sumOf { it.bet } }
+        val settled = judged.toMutableList()
+        for (seatIndex in state.settlementOrder) {
+            settled[seatIndex] = judged[seatIndex].map { hand ->
+                val winnings = minOf(hand.winnings, house)
+                house -= winnings
+                hand.copy(paid = hand.stakeReturned + winnings)
+            }
+        }
 
-    private fun payoutFor(hand: TableHand): Long = when (hand.result) {
-        RoundResult.PLAYER_BLACKJACK -> hand.bet + (hand.bet * 3) / 2
-        RoundResult.PLAYER_WIN, RoundResult.DEALER_BUST -> hand.bet * 2
-        RoundResult.PUSH -> hand.bet
-        RoundResult.DEALER_WIN, RoundResult.PLAYER_BUST, null -> 0L
+        val seats = state.seats.mapIndexed { i, seat ->
+            seat.copy(stack = seat.stack + settled[i].sumOf { it.paid }, hands = settled[i])
+        }
+        state = state.copy(
+            seats = seats, shoe = shoe, house = house,
+            dealerCards = dealer, phase = TablePhase.ROUND_OVER
+        )
     }
 }

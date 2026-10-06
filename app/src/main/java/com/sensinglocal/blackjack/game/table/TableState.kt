@@ -21,8 +21,26 @@ data class TableHand(
     val status: HandStatus = HandStatus.PLAYING,
     /** A split hand can reach 21 on two cards but is never a natural (no 3:2 payout). */
     val fromSplit: Boolean = false,
-    val result: RoundResult? = null
+    val result: RoundResult? = null,
+    /** What the seat actually got back at settlement (stake + winnings); less than [fullPayout] if the house ran dry. */
+    val paid: Long = 0
 ) {
+    /** House money this hand wins when the result is a win (even money, or 3:2 truncated for a natural). */
+    val winnings: Long get() = when (result) {
+        RoundResult.PLAYER_BLACKJACK -> (bet * 3) / 2
+        RoundResult.PLAYER_WIN, RoundResult.DEALER_BUST -> bet
+        else -> 0L
+    }
+
+    /** The seat's own bet handed back: on any win or a push, never on a loss. Never drawn from the house. */
+    val stakeReturned: Long get() = when (result) {
+        RoundResult.PLAYER_BLACKJACK, RoundResult.PLAYER_WIN, RoundResult.DEALER_BUST, RoundResult.PUSH -> bet
+        else -> 0L
+    }
+
+    val fullPayout: Long get() = stakeReturned + winnings
+    val lost: Boolean get() = result == RoundResult.DEALER_WIN || result == RoundResult.PLAYER_BUST
+
     val total: Int get() = handValue(cards).first
     val soft: Boolean get() = handValue(cards).second
     val isNaturalBlackjack: Boolean get() = !fromSplit && isBlackjack(cards)
@@ -36,15 +54,28 @@ data class Seat(
 
 data class SeatConfig(val kind: SeatKind, val stack: Long)
 
+/**
+ * Stand-in for "the house can't run out" (Quick Play-shaped tables, tests). Half of Long.MAX_VALUE
+ * so adding collected bets to it can never overflow.
+ */
+const val UNLIMITED_HOUSE = Long.MAX_VALUE / 2
+
 data class TableConfig(
     val seats: List<SeatConfig>,
     val shoeCount: Int = 4,
     /** A fresh shuffled shoe replaces the current one at the start of a round below this many cards. */
-    val reshuffleBelow: Int = 15
+    val reshuffleBelow: Int = 15,
+    /** The table's finite house pool. Story tables set this; when it hits zero the table is over. */
+    val houseBankroll: Long = UNLIMITED_HOUSE
 ) {
+    init {
+        require(houseBankroll > 0) { "House bankroll must be positive" }
+    }
+
     companion object {
         /** Player vs. dealer, the Quick Play shape. */
-        fun singlePlayer(stack: Long) = TableConfig(listOf(SeatConfig(SeatKind.HUMAN, stack)))
+        fun singlePlayer(stack: Long, houseBankroll: Long = UNLIMITED_HOUSE) =
+            TableConfig(listOf(SeatConfig(SeatKind.HUMAN, stack)), houseBankroll = houseBankroll)
     }
 }
 
@@ -52,6 +83,8 @@ data class TableConfig(
 data class TableState(
     val seats: List<Seat>,
     val shoe: Shoe,
+    /** The table's remaining house pool. Bets in play are held on the table, not counted here. */
+    val house: Long,
     val dealerCards: List<Card> = emptyList(),
     val phase: TablePhase = TablePhase.BETTING,
     val activeSeat: Int = 0,
@@ -60,6 +93,13 @@ data class TableState(
 ) {
     val humanSeatIndex: Int get() = seats.indexOfFirst { it.kind == SeatKind.HUMAN }
     val humanSeat: Seat get() = seats[humanSeatIndex]
+
+    /** The house ran out of money: the table is over (the story layer sends the player onward). */
+    val houseBroke: Boolean get() = house <= 0L
+
+    /** Winners are paid in this order when the house is short: the human first, then the rest in seat order. */
+    val settlementOrder: List<Int>
+        get() = listOf(humanSeatIndex) + seats.indices.filter { it != humanSeatIndex }
 
     val activeHand: TableHand? get() =
         if (phase == TablePhase.SEAT_TURN) seats.getOrNull(activeSeat)?.hands?.getOrNull(activeHandIndex) else null
