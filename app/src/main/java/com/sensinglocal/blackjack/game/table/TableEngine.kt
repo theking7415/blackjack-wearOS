@@ -13,25 +13,25 @@ import kotlin.random.Random
  * Story Mode's table engine. Same rules as Quick Play's `BlackjackEngine` — dealer hits soft 17,
  * blackjack pays 3:2 (truncated), one split per round with no re-split, split aces get one card
  * each, double down on any two cards — but built on immutable state ([TableState], [Shoe]) with
- * Long money, and dealing in real table order (one card per seat, dealer up-card, repeat).
+ * Long money, a finite house pool, and dealing in real table order (one card per seat, dealer
+ * up-card, repeat).
  *
- * **Step 2 scope:** exactly one HUMAN seat. AI seats, house bankroll, events and scripting land in
- * later steps (see CLAUDE.md, "Multiplayer table engine design"); the dealing, turn-advance and
- * settlement code is already written over seats so those steps extend it rather than rewrite it.
+ * Up to [MAX_SEATS] seats, exactly one HUMAN; the rest are AI (or EMPTY). Seats act in table order.
+ * After [placeBet] (or any human action) the engine may be waiting on an AI seat: call [step]
+ * repeatedly — each call plays exactly one AI action, so the UI can pace them — until it returns
+ * false (the human's turn, or the round is over). AI seats play [BasicStrategy] and bet a
+ * percentage of their stack ([StyleProfile.betPercent]); one under the table minimum sits out.
+ *
+ * Still to come (see CLAUDE.md, "Multiplayer table engine design"): events (step 5), scripting
+ * and grab-all (step 6).
  */
 class TableEngine(
     private val config: TableConfig,
     initialShoe: Shoe? = null,
     private val random: Random = Random.Default
 ) {
-    init {
-        require(config.seats.size == 1 && config.seats[0].kind == SeatKind.HUMAN) {
-            "TableEngine currently supports a single human seat; AI seats arrive in a later step"
-        }
-    }
-
     var state: TableState = TableState(
-        seats = config.seats.map { Seat(it.kind, it.stack) },
+        seats = config.seats.map { Seat(it.kind, it.stack, style = it.style) },
         shoe = initialShoe ?: Shoe.fresh(config.shoeCount, random),
         house = config.houseBankroll
     )
@@ -41,13 +41,20 @@ class TableEngine(
         check(state.phase == TablePhase.BETTING) { "Not the betting phase" }
         check(!state.houseBroke) { "The house is broke; this table is over" }
         val seatIndex = state.humanSeatIndex
-        require(amount in 1..state.seats[seatIndex].stack) { "Bet must be between 1 and current stack" }
+        val stack = state.seats[seatIndex].stack
+        require(amount in 1..stack) { "Bet must be between 1 and current stack" }
+        require(amount >= minOf(config.minBet, stack)) { "Bet is below the table minimum" }
 
         var shoe = state.shoe
         if (shoe.remaining < config.reshuffleBelow) shoe = Shoe.fresh(config.shoeCount, random)
 
-        // Only seats with a bet get cards. Step 4 adds AI bets here.
-        val bets = mapOf(seatIndex to amount)
+        // Only seats with a bet get cards: the human, plus every AI seat that can afford the minimum.
+        val bets = buildMap<Int, Long> {
+            state.seats.forEachIndexed { i, seat ->
+                val bet = if (i == seatIndex) amount else aiBet(seat)
+                if (bet != null) put(i, bet)
+            }
+        }
         val dealt = bets.keys.associateWith { mutableListOf<Card>() }
         val dealer = mutableListOf<Card>()
         repeat(2) {
@@ -76,8 +83,32 @@ class TableEngine(
         advance()
     }
 
-    fun hit() {
-        val (seatIndex, hand) = activeHumanHand()
+    fun hit() = applyHit(SeatKind.HUMAN)
+    fun stand() = applyStand(SeatKind.HUMAN)
+    fun doubleDown() = applyDoubleDown(SeatKind.HUMAN)
+    fun split() = applySplit(SeatKind.HUMAN)
+
+    /** Plays one action for the AI seat whose turn it is. False if it isn't an AI's turn. */
+    fun step(): Boolean {
+        if (state.phase != TablePhase.SEAT_TURN) return false
+        if (state.seats[state.activeSeat].kind != SeatKind.AI) return false
+        val hand = checkNotNull(state.activeHand) { "No active hand" }
+        when (BasicStrategy.decide(hand, state.dealerCards.first(), state.canDoubleDown, state.canSplit)) {
+            TableAction.HIT -> applyHit(SeatKind.AI)
+            TableAction.STAND -> applyStand(SeatKind.AI)
+            TableAction.DOUBLE -> applyDoubleDown(SeatKind.AI)
+            TableAction.SPLIT -> applySplit(SeatKind.AI)
+        }
+        return true
+    }
+
+    private fun aiBet(seat: Seat): Long? {
+        if (seat.kind != SeatKind.AI || seat.stack <= 0 || seat.stack < config.minBet) return null
+        return (seat.stack * seat.style.betPercent / 100).coerceIn(config.minBet, seat.stack)
+    }
+
+    private fun applyHit(kind: SeatKind) {
+        val (seatIndex, hand) = activeHand(kind)
         val (card, shoe) = state.shoe.draw()
         val cards = hand.cards + card
         val status = if (isBust(cards)) HandStatus.BUST else hand.status
@@ -85,14 +116,14 @@ class TableEngine(
         if (status == HandStatus.BUST) advance()
     }
 
-    fun stand() {
-        val (seatIndex, hand) = activeHumanHand()
+    private fun applyStand(kind: SeatKind) {
+        val (seatIndex, hand) = activeHand(kind)
         state = state.copy(seats = replaceActiveHand(seatIndex, hand.copy(status = HandStatus.STOOD)))
         advance()
     }
 
-    fun doubleDown() {
-        val (seatIndex, hand) = activeHumanHand()
+    private fun applyDoubleDown(kind: SeatKind) {
+        val (seatIndex, hand) = activeHand(kind)
         require(hand.cards.size == 2) { "Can only double down on the first two cards" }
         require(state.seats[seatIndex].stack >= hand.bet) { "Not enough stack to double down" }
 
@@ -107,8 +138,8 @@ class TableEngine(
         advance()
     }
 
-    fun split() {
-        val (seatIndex, hand) = activeHumanHand()
+    private fun applySplit(kind: SeatKind) {
+        val (seatIndex, hand) = activeHand(kind)
         val seat = state.seats[seatIndex]
         require(seat.hands.size == 1) { "Only one split per round is supported" }
         require(hand.cards.size == 2 && hand.cards[0].rank == hand.cards[1].rank) { "Can only split a pair" }
@@ -141,10 +172,11 @@ class TableEngine(
         )
     }
 
-    private fun activeHumanHand(): Pair<Int, TableHand> {
+    /** The active seat's active hand, provided that seat is of [kind] (humans can't act for AIs and vice versa). */
+    private fun activeHand(kind: SeatKind): Pair<Int, TableHand> {
         check(state.phase == TablePhase.SEAT_TURN) { "Not a seat's turn" }
         val seatIndex = state.activeSeat
-        check(state.seats[seatIndex].kind == SeatKind.HUMAN) { "Not the human seat's turn" }
+        check(state.seats[seatIndex].kind == kind) { "Not the ${kind.name.lowercase()} seat's turn" }
         return seatIndex to checkNotNull(state.activeHand) { "No active hand" }
     }
 

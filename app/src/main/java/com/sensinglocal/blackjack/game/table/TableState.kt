@@ -46,13 +46,35 @@ data class TableHand(
     val isNaturalBlackjack: Boolean get() = !fromSplit && isBlackjack(cards)
 }
 
+/**
+ * How an AI character plays. For now only bet sizing: [betPercent] of its stack per round (clamped
+ * to the table minimum). Play itself is plain basic strategy; a mistake/lean model can be added
+ * here later without touching the engine's shape.
+ */
+data class StyleProfile(val betPercent: Int) {
+    init {
+        require(betPercent in 1..100) { "betPercent must be 1..100" }
+    }
+
+    companion object {
+        val CAUTIOUS = StyleProfile(5)
+        val STEADY = StyleProfile(10)
+        val RECKLESS = StyleProfile(25)
+    }
+}
+
 data class Seat(
     val kind: SeatKind,
     val stack: Long,
-    val hands: List<TableHand> = emptyList()
+    val hands: List<TableHand> = emptyList(),
+    val style: StyleProfile = StyleProfile.STEADY
 )
 
-data class SeatConfig(val kind: SeatKind, val stack: Long)
+data class SeatConfig(
+    val kind: SeatKind,
+    val stack: Long,
+    val style: StyleProfile = StyleProfile.STEADY
+)
 
 /**
  * Stand-in for "the house can't run out" (Quick Play-shaped tables, tests). Half of Long.MAX_VALUE
@@ -60,16 +82,26 @@ data class SeatConfig(val kind: SeatKind, val stack: Long)
  */
 const val UNLIMITED_HOUSE = Long.MAX_VALUE / 2
 
+const val MAX_SEATS = 4
+
 data class TableConfig(
+    /** In table order (index 0 acts first). 1..[MAX_SEATS] seats, exactly one HUMAN. */
     val seats: List<SeatConfig>,
     val shoeCount: Int = 4,
-    /** A fresh shuffled shoe replaces the current one at the start of a round below this many cards. */
-    val reshuffleBelow: Int = 15,
+    /**
+     * A fresh shuffled shoe replaces the current one at the start of a round below this many cards.
+     * Defaults to 15 per seat (15 for a lone player, as in Quick Play) so a full table can't run dry mid-round.
+     */
+    val reshuffleBelow: Int = 15 * seats.size,
     /** The table's finite house pool. Story tables set this; when it hits zero the table is over. */
-    val houseBankroll: Long = UNLIMITED_HOUSE
+    val houseBankroll: Long = UNLIMITED_HOUSE,
+    val minBet: Long = 1
 ) {
     init {
+        require(seats.size in 1..MAX_SEATS) { "A table has 1..$MAX_SEATS seats" }
+        require(seats.count { it.kind == SeatKind.HUMAN } == 1) { "A table needs exactly one human seat" }
         require(houseBankroll > 0) { "House bankroll must be positive" }
+        require(minBet > 0) { "Minimum bet must be positive" }
     }
 
     companion object {

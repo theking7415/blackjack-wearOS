@@ -36,11 +36,6 @@ class TableEngineTest {
 
     // --- setup / betting -------------------------------------------------------------------
 
-    @Test(expected = IllegalArgumentException::class)
-    fun `multi-seat tables are not supported yet`() {
-        TableEngine(TableConfig(listOf(SeatConfig(SeatKind.HUMAN, 10), SeatConfig(SeatKind.AI, 10))))
-    }
-
     @Test
     fun `starts in betting with the full stack`() {
         val e = TableEngine(TableConfig.singlePlayer(500), random = Random(1))
