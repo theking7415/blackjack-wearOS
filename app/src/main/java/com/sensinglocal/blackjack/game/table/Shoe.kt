@@ -23,6 +23,20 @@ class Shoe private constructor(private val cards: List<Card>, private val positi
     /** The undealt cards in draw order (next card first). */
     fun snapshot(): List<Card> = cards.subList(position, cards.size).toList()
 
+    /**
+     * A shoe whose next cards are [slots] in order: a card pins that position, null leaves it to the
+     * real shoe. Pinned cards are taken out of the remaining shoe (when present) so the physical card
+     * counts stay as honest as the script allows; unpinned positions and everything after the slots
+     * keep the original order.
+     */
+    fun withScriptedTop(slots: List<Card?>): Shoe {
+        val rest = snapshot().toMutableList()
+        for (card in slots.filterNotNull()) rest.remove(card)
+        val fillers = rest.iterator()
+        val top = slots.map { it ?: run { check(fillers.hasNext()) { "Shoe too small for the scripted deal" }; fillers.next() } }
+        return of(top + fillers.asSequence().toList())
+    }
+
     override fun equals(other: Any?): Boolean = other is Shoe && snapshot() == other.snapshot()
     override fun hashCode(): Int = snapshot().hashCode()
     override fun toString(): String = "Shoe(remaining=$remaining)"

@@ -26,7 +26,8 @@ import kotlin.random.Random
  * bubbles ([step] returns an empty list when there was no AI turn to play). The state is still
  * the source of truth; events only describe what happened.
  *
- * Still to come (see CLAUDE.md, "Multiplayer table engine design"): scripting and grab-all (step 6).
+ * Story hooks: [TableConfig.scripts] rig a round's cards and force AI actions ([RoundScript]);
+ * [grabAll] is the "shoot the dealer and run" money grab, followed by [TableConfig.policeHand].
  */
 class TableEngine(
     private val config: TableConfig,
@@ -76,6 +77,8 @@ class TableEngine(
                 if (bet != null) put(i, bet)
             }
         }
+        config.scripts[state.round]?.let { shoe = shoe.withScriptedTop(scriptedSlots(it, bets.keys.sorted())) }
+
         for (i in bets.keys.sorted()) emit(TableEvent.BetPlaced(i, bets.getValue(i)))
         val dealt = bets.keys.associateWith { mutableListOf<Card>() }
         val dealer = mutableListOf<Card>()
@@ -121,12 +124,65 @@ class TableEngine(
         if (state.phase != TablePhase.SEAT_TURN) return@recording
         if (state.seats[state.activeSeat].kind != SeatKind.AI) return@recording
         val hand = checkNotNull(state.activeHand) { "No active hand" }
-        when (BasicStrategy.decide(hand, state.dealerCards.first(), state.canDoubleDown, state.canSplit)) {
+        val seatIndex = state.activeSeat
+        val used = state.scriptCursor[seatIndex] ?: 0
+        val forced = config.scripts[state.round]?.actions?.get(seatIndex)?.getOrNull(used)
+        state = state.copy(scriptCursor = state.scriptCursor + (seatIndex to used + 1))
+        val legalForced = forced?.takeIf {
+            when (it) {
+                TableAction.HIT, TableAction.STAND -> true
+                TableAction.DOUBLE -> state.canDoubleDown
+                TableAction.SPLIT -> state.canSplit
+            }
+        }
+        when (legalForced ?: BasicStrategy.decide(hand, state.dealerCards.first(), state.canDoubleDown, state.canSplit)) {
             TableAction.HIT -> applyHit(SeatKind.AI)
             TableAction.STAND -> applyStand(SeatKind.AI)
             TableAction.DOUBLE -> applyDoubleDown(SeatKind.AI)
             TableAction.SPLIT -> applySplit(SeatKind.AI)
         }
+    }
+
+    /** The opening deal as shoe slots, in real deal order (each betting seat, then the dealer, twice), then the scripted draws. */
+    private fun scriptedSlots(script: RoundScript, bettors: List<Int>): List<Card?> {
+        val slots = mutableListOf<Card?>()
+        repeat(2) { r ->
+            for (i in bettors) slots.add(script.seatCards[i]?.getOrNull(r))
+            slots.add(if (r == 0) script.dealerUp else script.dealerHole)
+        }
+        slots.addAll(script.draws)
+        return slots
+    }
+
+    /**
+     * Moves every other seat's stack and the whole house pool to the human and ends the table
+     * ("shoot the dealer and run"). Only between hands, and only on a finite house. The caller
+     * (story layer) then runs the police hand ([TableConfig.policeHand]) with the human's stack.
+     */
+    fun grabAll(): List<TableEvent> = recording {
+        check(state.phase == TablePhase.BETTING) { "Can only grab the money between hands" }
+        check(!state.houseBroke) { "The table is already over" }
+        check(config.houseBankroll < UNLIMITED_HOUSE) { "An unlimited house can't be grabbed" }
+
+        val human = state.humanSeatIndex
+        val fromSeats = state.seats.withIndex()
+            .filter { (i, seat) -> i != human && seat.stack > 0 }
+            .associate { (i, seat) -> i to seat.stack }
+        val fromHouse = state.house
+        val total = fromSeats.values.sum() + fromHouse
+        state = state.copy(
+            seats = state.seats.mapIndexed { i, seat ->
+                when {
+                    i == human -> seat.copy(stack = seat.stack + total)
+                    i in fromSeats -> seat.copy(stack = 0)
+                    else -> seat
+                }
+            },
+            house = 0,
+            grabbed = true
+        )
+        emit(TableEvent.MoneyGrabbed(fromSeats, fromHouse))
+        emit(TableEvent.HouseBroke)
     }
 
     private fun aiBet(seat: Seat): Long? {
@@ -209,7 +265,8 @@ class TableEngine(
             phase = TablePhase.BETTING,
             activeSeat = 0,
             activeHandIndex = 0,
-            round = state.round + 1
+            round = state.round + 1,
+            scriptCursor = emptyMap()
         )
     }
 

@@ -51,6 +51,11 @@ sealed interface TableEvent {
     /** The seat played this round and now has nothing left. */
     data class SeatBrokeOut(val seat: Int) : TableEvent
 
+    /** The player grabbed every other seat's stack and the house pool and ran. */
+    data class MoneyGrabbed(val fromSeats: Map<Int, Long>, val fromHouse: Long) : TableEvent {
+        val total: Long get() = fromSeats.values.sum() + fromHouse
+    }
+
     /** The house pool hit zero: the table is over. */
     data object HouseBroke : TableEvent
 }

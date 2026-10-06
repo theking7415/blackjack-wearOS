@@ -95,19 +95,42 @@ data class TableConfig(
     val reshuffleBelow: Int = 15 * seats.size,
     /** The table's finite house pool. Story tables set this; when it hits zero the table is over. */
     val houseBankroll: Long = UNLIMITED_HOUSE,
-    val minBet: Long = 1
+    val minBet: Long = 1,
+    /** Story scripts by round number (first round = 0); see [RoundScript]. */
+    val scripts: Map<Int, RoundScript> = emptyMap()
 ) {
     init {
         require(seats.size in 1..MAX_SEATS) { "A table has 1..$MAX_SEATS seats" }
         require(seats.count { it.kind == SeatKind.HUMAN } == 1) { "A table needs exactly one human seat" }
         require(houseBankroll > 0) { "House bankroll must be positive" }
         require(minBet > 0) { "Minimum bet must be positive" }
+        for ((round, script) in scripts) {
+            require(round >= 0) { "Script rounds start at 0" }
+            require(script.seatCards.keys.all { it in seats.indices }) { "Script rigs a seat that doesn't exist" }
+            require(script.actions.keys.all { it in seats.indices && seats[it].kind == SeatKind.AI }) {
+                "Forced actions are only for AI seats"
+            }
+        }
     }
 
     companion object {
         /** Player vs. dealer, the Quick Play shape. */
         fun singlePlayer(stack: Long, houseBankroll: Long = UNLIMITED_HOUSE) =
             TableConfig(listOf(SeatConfig(SeatKind.HUMAN, stack)), houseBankroll = houseBankroll)
+
+        /**
+         * The all-or-nothing hand against the police after "shoot the dealer and run": the whole
+         * [stake] must be bet (minimum bet = stake), and the house can cover even a 3:2 natural.
+         * Win = the stack doubles; lose = it hits zero.
+         */
+        fun policeHand(stake: Long): TableConfig {
+            require(stake > 0) { "Nothing to stake" }
+            return TableConfig(
+                listOf(SeatConfig(SeatKind.HUMAN, stake)),
+                houseBankroll = stake * 2,
+                minBet = stake
+            )
+        }
     }
 }
 
@@ -121,7 +144,11 @@ data class TableState(
     val phase: TablePhase = TablePhase.BETTING,
     val activeSeat: Int = 0,
     val activeHandIndex: Int = 0,
-    val round: Int = 0
+    val round: Int = 0,
+    /** Per seat: how many scripted actions it has used this round (see [RoundScript.actions]). */
+    val scriptCursor: Map<Int, Int> = emptyMap(),
+    /** The player grabbed the table's money and ran; the table is over (the house reads as broke). */
+    val grabbed: Boolean = false
 ) {
     val humanSeatIndex: Int get() = seats.indexOfFirst { it.kind == SeatKind.HUMAN }
     val humanSeat: Seat get() = seats[humanSeatIndex]
