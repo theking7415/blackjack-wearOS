@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -20,15 +21,23 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.toSize
 import androidx.compose.ui.zIndex
 import androidx.wear.compose.material.Text
 import com.sensinglocal.blackjack.game.Card
@@ -36,9 +45,11 @@ import com.sensinglocal.blackjack.game.HandStatus
 import com.sensinglocal.blackjack.game.isBust
 import com.sensinglocal.blackjack.game.table.Seat
 import com.sensinglocal.blackjack.game.table.SeatKind
+import com.sensinglocal.blackjack.game.table.TableEvent
 import com.sensinglocal.blackjack.game.table.TableHand
 import com.sensinglocal.blackjack.game.table.TablePhase
 import com.sensinglocal.blackjack.game.table.TableState
+import kotlinx.coroutines.flow.first
 
 /** How long the ring takes to turn to the next seat. */
 private const val ROTATE_MS = 380
@@ -50,6 +61,10 @@ private const val ROTATE_MS = 380
  * All geometry is a fraction of the screen side, tuned in [SeatRing].
  *
  * While AI seats play ([aiPlaying]) the controls are hidden and tapping anywhere calls [onSkipAi].
+ *
+ * [events] is what the engine just reported; cards it dealt fly out of the deck pile to their
+ * seats (see [TableFlightController]). The ring holds still while cards are in the air, and labels,
+ * results and buttons wait for them to land.
  */
 @Composable
 fun TableScreen(
@@ -57,6 +72,7 @@ fun TableScreen(
     seatNames: List<String>,
     minBet: Long,
     aiPlaying: Boolean,
+    events: List<TableEvent>,
     onBet: (Long) -> Unit,
     onHit: () -> Unit,
     onStand: () -> Unit,
@@ -79,18 +95,41 @@ fun TableScreen(
 
         // The seat at the bottom: whoever's turn it is, else you. Animated as a (fractional) seat
         // index; unwrapTarget picks the short way round so the ring never spins backwards.
+        val controller = remember { TableFlightController() }
+        // A side effect of composition (not a LaunchedEffect) on purpose: the flights must exist before
+        // the seats below compose, or a newly dealt card would show in its slot for one frame first.
+        remember(events) { controller.onEvents(events, state) }
+        LaunchedEffect(state.phase) {
+            if (state.phase == TablePhase.BETTING) controller.flights.clear()
+        }
+        val cardsInAir = controller.flights.isNotEmpty()
+        // Results only show once every card has landed.
+        val settled = state.phase == TablePhase.ROUND_OVER && !cardsInAir
+
         val frontTarget = if (state.phase == TablePhase.SEAT_TURN) state.activeSeat else state.humanSeatIndex
         val front = remember { Animatable(frontTarget.toFloat()) }
         LaunchedEffect(frontTarget, seatCount) {
+            // Don't swing the ring away while cards are still flying to where it is now.
+            snapshotFlow { controller.flights.isEmpty() }.first { it }
             front.animateTo(
                 SeatRing.unwrapTarget(front.value, frontTarget, seatCount),
                 tween(ROTATE_MS, easing = FastOutSlowInEasing)
             )
         }
 
+        TableDeckPile(
+            controller = controller,
+            visible = state.dealerCards.isNotEmpty(),
+            modifier = Modifier
+                .align(Alignment.Center)
+                .offset(x = side * SeatRing.DECK_X, y = side * SeatRing.DECK_Y)
+                .zIndex(-1f)
+        )
+
         if (state.dealerCards.isNotEmpty()) {
             DealerBlock(
                 state = state,
+                controller = controller,
                 side = side,
                 modifier = Modifier.align(Alignment.Center).offset(y = side * SeatRing.CENTER_Y)
             )
@@ -107,6 +146,8 @@ fun TableScreen(
                     seat = seat,
                     seatIndex = index,
                     state = state,
+                    controller = controller,
+                    settled = settled,
                     slot = slot,
                     side = side,
                     modifier = Modifier
@@ -118,7 +159,7 @@ fun TableScreen(
         }
 
         val tableOver = state.houseBroke || state.humanSeat.stack <= 0L
-        val humanTurn = state.phase == TablePhase.SEAT_TURN && !aiPlaying &&
+        val humanTurn = state.phase == TablePhase.SEAT_TURN && !aiPlaying && !cardsInAir &&
             state.seats[state.activeSeat].kind == SeatKind.HUMAN
         when {
             state.phase == TablePhase.BETTING -> Box(
@@ -135,7 +176,7 @@ fun TableScreen(
             ) {
                 PlayControls(state, onHit, onStand, onDoubleDown, onSplit)
             }
-            state.phase == TablePhase.ROUND_OVER && !aiPlaying -> Box(
+            settled && !aiPlaying -> Box(
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = side * 0.075f).zIndex(2f)
             ) {
                 if (tableOver) {
@@ -145,6 +186,8 @@ fun TableScreen(
                 }
             }
         }
+
+        TableFlightOverlay(controller = controller, modifier = Modifier.fillMaxSize().zIndex(1.5f))
 
         PauseButton(
             onClick = { pauseOpen = true },
@@ -163,10 +206,12 @@ fun TableScreen(
 // --- the dealer ----------------------------------------------------------------------------
 
 @Composable
-private fun DealerBlock(state: TableState, side: Dp, modifier: Modifier = Modifier) {
+private fun DealerBlock(state: TableState, controller: TableFlightController, side: Dp, modifier: Modifier = Modifier) {
     val revealed = state.dealerHoleCardRevealed
+    // The total waits until the dealer's last drawn card has landed, so it never spoils the draw.
+    val showTotal = revealed && !controller.isFlyingIn(DEALER_ROW)
     val label = when {
-        !revealed -> "Dealer"
+        !showTotal -> "Dealer"
         isBust(state.dealerCards) -> "Dealer BUST"
         else -> "Dealer ${state.dealerTotal}"
     }
@@ -177,7 +222,7 @@ private fun DealerBlock(state: TableState, side: Dp, modifier: Modifier = Modifi
     ) {
         Text(
             text = label,
-            color = if (revealed && isBust(state.dealerCards)) ResultLoseRed else MenuGold,
+            color = if (showTotal && isBust(state.dealerCards)) ResultLoseRed else MenuGold,
             fontWeight = FontWeight.Bold,
             fontSize = 12.sp
         )
@@ -185,7 +230,9 @@ private fun DealerBlock(state: TableState, side: Dp, modifier: Modifier = Modifi
             cards = state.dealerCards,
             hiddenIndex = if (revealed) -1 else 1,
             scale = SeatRing.DEALER_SCALE,
-            maxWidth = side * 0.4f
+            maxWidth = side * 0.4f,
+            rowKey = DEALER_ROW,
+            controller = controller
         )
     }
 }
@@ -198,6 +245,8 @@ private fun SeatView(
     seat: Seat,
     seatIndex: Int,
     state: TableState,
+    controller: TableFlightController,
+    settled: Boolean,
     slot: SeatRing.Slot,
     side: Dp,
     modifier: Modifier = Modifier
@@ -206,7 +255,6 @@ private fun SeatView(
     val scale = slot.scale
     val isFront = closeness > 0.5f
     val isActive = state.phase == TablePhase.SEAT_TURN && state.activeSeat == seatIndex
-    val roundOver = state.phase == TablePhase.ROUND_OVER
     val nameSize = (10f + 3f * closeness).sp
     val infoSize = (11f + 3f * closeness).sp
     val maxWidth = side * (0.22f + 0.28f * closeness)
@@ -222,13 +270,21 @@ private fun SeatView(
             Text(text = name, color = nameColor, fontWeight = FontWeight.Bold, fontSize = nameSize)
             Text(text = compactAmount(seat.stack), color = MenuGold, fontSize = infoSize)
         } else {
-            val labels = seat.hands.map { handLabel(it, roundOver) }
+            // Labels describe only the cards that have landed, and results wait for the whole table.
+            val labels = seat.hands.mapIndexed { handIndex, hand ->
+                handLabel(shownHand(hand, seatRowKey(seatIndex, handIndex), controller), settled)
+            }
+            // After a split, which of the hands is being played right now (-1 if not applicable).
+            val playingHand = if (isActive && seat.hands.size > 1) state.activeHandIndex else -1
             if (isFront) {
                 val text = buildString {
                     if (isActive) append("▶ ")
                     append(name)
-                    append(' ')
-                    append(labels.joinToString("/") { it.first })
+                    // The hand being played is bracketed: "[16]/12".
+                    val totals = labels.mapIndexed { i, label ->
+                        if (i == playingHand && label.first.isNotEmpty()) "[${label.first}]" else label.first
+                    }.joinToString("/").trim('/')
+                    if (totals.isNotEmpty()) append(' ').append(totals)
                     append(" · ")
                     append(compactAmount(seat.stack))
                 }
@@ -245,8 +301,21 @@ private fun SeatView(
             val handMax = (maxWidth - handGap * (seat.hands.size - 1)) / seat.hands.size
             Row(horizontalArrangement = Arrangement.spacedBy(handGap), verticalAlignment = Alignment.Top) {
                 seat.hands.forEachIndexed { handIndex, hand ->
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CardRow(cards = hand.cards, hiddenIndex = -1, scale = scale, maxWidth = handMax)
+                    // The hand you're not playing is dimmed, and the one you are gets a gold bar under it.
+                    val dimmed = playingHand >= 0 && handIndex != playingHand
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.alpha(if (dimmed) 0.45f else 1f)
+                    ) {
+                        CardRow(
+                            cards = hand.cards,
+                            hiddenIndex = -1,
+                            scale = scale,
+                            maxWidth = handMax,
+                            rowKey = seatRowKey(seatIndex, handIndex),
+                            controller = controller,
+                            highlight = handIndex == playingHand
+                        )
                         if (!isFront) {
                             Text(
                                 text = labels[handIndex].first,
@@ -273,24 +342,67 @@ private fun handLabel(hand: TableHand, roundOver: Boolean): Pair<String, Color> 
         }
     }
     return when {
+        hand.cards.isEmpty() -> "" to Color.White // every card still in the air
         hand.status == HandStatus.BUST -> "BUST" to ResultLoseRed
         hand.isNaturalBlackjack -> "21!" to MenuGold
         else -> hand.total.toString() to Color.White
     }
 }
 
-/** A row of cards that overlaps (like a fanned hand) when it would otherwise exceed [maxWidth]. */
+/**
+ * The hand as the player should currently see it: cards still in the air don't count yet, and while
+ * any are, its bust/stand status and result are held back too.
+ */
+private fun shownHand(hand: TableHand, rowKey: String, controller: TableFlightController): TableHand {
+    if (!controller.isFlyingIn(rowKey)) return hand
+    val landed = hand.cards.filterIndexed { index, _ -> !controller.isFlying(TableSlotKey(rowKey, index)) }
+    return hand.copy(cards = landed, status = HandStatus.PLAYING, result = null)
+}
+
+/**
+ * A row of cards that overlaps (like a fanned hand) when it would otherwise exceed [maxWidth].
+ * Every slot reports its own rectangle to the [controller], and a card that is still flying in is
+ * an empty placeholder of the same size until it lands.
+ */
 @Composable
-private fun CardRow(cards: List<Card>, hiddenIndex: Int, scale: Float, maxWidth: Dp) {
+private fun CardRow(
+    cards: List<Card>,
+    hiddenIndex: Int,
+    scale: Float,
+    maxWidth: Dp,
+    rowKey: String,
+    controller: TableFlightController,
+    highlight: Boolean = false
+) {
     val spacing = cardSpacing(
         count = cards.size,
         cardWidth = PixelCardWidth.value * scale,
         maxWidth = maxWidth.value,
         normalSpacing = PixelCardSpacing.value * scale
     )
-    Row(horizontalArrangement = Arrangement.spacedBy(spacing.dp)) {
+    // A thin gold bar just under the row marks the hand currently being played.
+    val rowModifier = if (highlight) {
+        Modifier.drawBehind {
+            drawRect(
+                color = MenuGold,
+                topLeft = Offset(0f, size.height + 1.dp.toPx()),
+                size = Size(size.width, 2.dp.toPx())
+            )
+        }
+    } else {
+        Modifier
+    }
+    Row(modifier = rowModifier, horizontalArrangement = Arrangement.spacedBy(spacing.dp)) {
         cards.forEachIndexed { index, card ->
-            PixelCard(card = card, faceDown = index == hiddenIndex, scale = scale)
+            val key = TableSlotKey(rowKey, index)
+            val measured = Modifier.onGloballyPositioned { coordinates ->
+                controller.slots[key] = SlotRect(coordinates.positionInRoot(), coordinates.size.toSize())
+            }
+            if (controller.isFlying(key)) {
+                Box(modifier = measured.size(PixelCardWidth * scale, PixelCardHeight * scale))
+            } else {
+                PixelCard(card = card, faceDown = index == hiddenIndex, modifier = measured, scale = scale)
+            }
         }
     }
 }

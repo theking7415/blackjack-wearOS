@@ -18,6 +18,11 @@ object SeatRing {
     const val MINI_SCALE = 0.5f
     const val DEALER_SCALE = 0.75f
 
+    /** The deal pile sits in the gap between the top and right seats (free at a full table's resting pose). */
+    const val DECK_X = 0.24f
+    const val DECK_Y = -0.285f
+    const val DECK_SCALE = 0.6f
+
     /** [x]/[y] are offsets from the screen centre as fractions of the screen side. */
     data class Slot(val x: Float, val y: Float, val closeness: Float) {
         /** 1.0 for the front seat, [MINI_SCALE] once a full step away, blended in between. */

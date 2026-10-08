@@ -17,8 +17,11 @@ import kotlinx.coroutines.launch
 /** Pause between one AI seat's action and the next, so you can watch each one play. */
 private const val AI_STEP_MS = 700L
 
-/** A little longer before the first AI action after a deal, so the new cards are seen first. */
-private const val AFTER_DEAL_MS = 1000L
+/**
+ * Before the first AI action after a deal: the ten opening cards fly out one by one (about 1.5s),
+ * then the ring turns to the first seat (about 0.4s), and only then does that seat act.
+ */
+private const val AFTER_DEAL_MS = 2300L
 
 /**
  * Runs a [TableEngine] for the table screen. The engine's `step()` plays exactly one AI action, so

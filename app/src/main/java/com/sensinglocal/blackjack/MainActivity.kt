@@ -120,6 +120,7 @@ class MainActivity : ComponentActivity() {
                             seatNames = DemoTable.seatNames,
                             minBet = DemoTable.config.minBet,
                             aiPlaying = tableViewModel.aiPlaying,
+                            events = tableViewModel.lastEvents,
                             onBet = tableViewModel::placeBet,
                             onHit = tableViewModel::hit,
                             onStand = tableViewModel::stand,
