@@ -66,11 +66,12 @@ import kotlin.math.pow
 import kotlin.random.Random
 
 private enum class AppScreen {
-    SPLASH, MENU, GAME, TUTORIAL, SETTINGS, NEW_GAME_SLOTS, RESUME_SLOTS, STORY_SCENE
+    SPLASH, MENU, GAME, TUTORIAL, SETTINGS, NEW_GAME_SLOTS, RESUME_SLOTS, STORY_SCENE, TABLE_PREVIEW
 }
 
 class MainActivity : ComponentActivity() {
     private val viewModel: BlackjackViewModel by viewModels()
+    private val tableViewModel: TableViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -112,6 +113,22 @@ class MainActivity : ComponentActivity() {
                             onResetBankroll = viewModel::resetBankroll,
                             onQuitToMenu = { screen = AppScreen.MENU }
                         )
+                        // Developer-only multiplayer table (Settings -> Developer). No swipe-back, like
+                        // Quick Play: the pause menu's "Quit to Menu" is the way out.
+                        AppScreen.TABLE_PREVIEW -> TableScreen(
+                            state = tableViewModel.state,
+                            seatNames = DemoTable.seatNames,
+                            minBet = DemoTable.config.minBet,
+                            aiPlaying = tableViewModel.aiPlaying,
+                            onBet = tableViewModel::placeBet,
+                            onHit = tableViewModel::hit,
+                            onStand = tableViewModel::stand,
+                            onDoubleDown = tableViewModel::doubleDown,
+                            onSplit = tableViewModel::split,
+                            onNextRound = tableViewModel::nextRound,
+                            onSkipAi = tableViewModel::skipAi,
+                            onQuitToMenu = { screen = AppScreen.MENU }
+                        )
                         AppScreen.TUTORIAL -> SwipeToDismissBox(
                             onDismissed = { screen = AppScreen.MENU }
                         ) { isBackground ->
@@ -127,7 +144,13 @@ class MainActivity : ComponentActivity() {
                             if (isBackground) {
                                 MenuBackdrop()
                             } else {
-                                SettingsScreen(onBack = { screen = AppScreen.MENU })
+                                SettingsScreen(
+                                    onBack = { screen = AppScreen.MENU },
+                                    onOpenTablePreview = {
+                                        tableViewModel.newTable()
+                                        screen = AppScreen.TABLE_PREVIEW
+                                    }
+                                )
                             }
                         }
                         AppScreen.NEW_GAME_SLOTS -> SwipeToDismissBox(
@@ -394,7 +417,7 @@ fun BlackjackScreen(
  * persisted after every action, so there's no meaningful "save vs. don't save" distinction to
  * offer yet — just one way out, back to the main menu. */
 @Composable
-private fun PauseOverlay(onResume: () -> Unit, onQuitToMenu: () -> Unit) {
+internal fun PauseOverlay(onResume: () -> Unit, onQuitToMenu: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxSize()

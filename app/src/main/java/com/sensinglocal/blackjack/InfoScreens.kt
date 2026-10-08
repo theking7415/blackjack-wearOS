@@ -1,7 +1,10 @@
 package com.sensinglocal.blackjack
 
+import android.content.pm.ApplicationInfo
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,8 +16,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusRequester
@@ -203,12 +209,18 @@ private fun SettingsSection(title: String, content: @Composable () -> Unit) {
 /** Settings screen with expandable sections. Only "About Game" exists so far — more sections
  * (sound, haptics, etc.) are expected to be added here later. */
 @Composable
-fun SettingsScreen(onBack: () -> Unit) {
+fun SettingsScreen(onBack: () -> Unit, onOpenTablePreview: () -> Unit) {
     val context = LocalContext.current
     val versionName = remember(context) {
         runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }
             .getOrNull() ?: "—"
     }
+    // Developer tools show in debug builds, or in any build after tapping the version line 5 times.
+    val debuggable = remember(context) {
+        (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+    }
+    var versionTaps by remember { mutableStateOf(0) }
+    val devToolsVisible = debuggable || versionTaps >= 5
     ScrollableInfoScreen(onBack = onBack) {
         item { Spacer(Modifier.height(40.dp)) }
         item { ScreenTitle("Settings") }
@@ -219,12 +231,33 @@ fun SettingsScreen(onBack: () -> Unit) {
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     Text(text = "Blackjack", color = Color.White, fontSize = 13.sp)
-                    Text(text = "Version $versionName", color = Color(0xFFAAAAAA), fontSize = 12.sp)
+                    Text(
+                        text = "Version $versionName",
+                        color = Color(0xFFAAAAAA),
+                        fontSize = 12.sp,
+                        modifier = Modifier.clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { versionTaps++ }
+                    )
                     Text(
                         text = "A pixel-art casino card game for Wear OS.",
                         color = Color.White,
                         fontSize = 12.sp,
                         textAlign = TextAlign.Center
+                    )
+                }
+            }
+        }
+        if (devToolsVisible) {
+            item {
+                SettingsSection(title = "Developer") {
+                    PixelButton(
+                        text = "Table Preview",
+                        onClick = onOpenTablePreview,
+                        width = 140.dp,
+                        height = 36.dp,
+                        fontSize = 14.sp
                     )
                 }
             }

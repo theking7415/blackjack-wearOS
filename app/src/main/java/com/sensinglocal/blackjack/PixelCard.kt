@@ -14,6 +14,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.scale as drawScaled
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -42,7 +43,7 @@ private const val SHADOW_OFFSET = 2f
  * drain on this hardware before (see the main-menu icon-ring bitmap-caching fix).
  */
 @Composable
-fun PixelCard(card: Card?, faceDown: Boolean = false, modifier: Modifier = Modifier) {
+fun PixelCard(card: Card?, faceDown: Boolean = false, modifier: Modifier = Modifier, scale: Float = 1f) {
     val context = LocalContext.current
     val density = LocalDensity.current
     val typeface = remember { vt323Typeface(context) }
@@ -52,8 +53,14 @@ fun PixelCard(card: Card?, faceDown: Boolean = false, modifier: Modifier = Modif
     val bitmap = remember(card, faceDown, density) {
         renderCardBitmap(widthPx, heightPx, card, faceDown, density, boldTypeface)
     }
-    Canvas(modifier = modifier.size(PixelCardWidth, PixelCardHeight)) {
-        drawImage(bitmap)
+    // [scale] shrinks the same cached bitmap (the table screen shows other seats' hands at half size),
+    // so there's still just one drawImage per card per frame.
+    Canvas(modifier = modifier.size(PixelCardWidth * scale, PixelCardHeight * scale)) {
+        if (scale == 1f) {
+            drawImage(bitmap)
+        } else {
+            drawScaled(scale, scale, pivot = Offset.Zero) { drawImage(bitmap) }
+        }
     }
 }
 
