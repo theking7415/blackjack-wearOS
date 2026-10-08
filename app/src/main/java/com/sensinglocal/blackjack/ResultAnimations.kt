@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.wear.compose.material.Text
@@ -38,9 +39,18 @@ private const val BANKROLL_COUNT_DURATION_MS = 600
  * recompositions): a red flash + horizontal shake + a persistent "BUST" stamp for BUST, or a
  * brief gold pulse for STOOD. PLAYING (including the reset at the start of a fresh round, when
  * hand rows are fully disposed/recreated as hands go empty→populated) does nothing.
+ *
+ * [stampSize] sizes the "BUST" stamp (smaller for the table screen's mini seats); [haptics] turns
+ * the bust buzz off for hands that aren't the player's own.
  */
 @Composable
-fun HandStatusEffect(status: HandStatus, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+fun HandStatusEffect(
+    status: HandStatus,
+    modifier: Modifier = Modifier,
+    stampSize: TextUnit = 15.sp,
+    haptics: Boolean = true,
+    content: @Composable () -> Unit
+) {
     val haptic = LocalHapticFeedback.current
     val shakeX = remember { Animatable(0f) }
     val flashAlpha = remember { Animatable(0f) }
@@ -48,7 +58,7 @@ fun HandStatusEffect(status: HandStatus, modifier: Modifier = Modifier, content:
     LaunchedEffect(status) {
         when (status) {
             HandStatus.BUST -> {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                if (haptics) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 launch {
                     flashAlpha.snapTo(0.55f)
                     flashAlpha.animateTo(0f, tween(BUST_FLASH_DURATION_MS))
@@ -84,14 +94,14 @@ fun HandStatusEffect(status: HandStatus, modifier: Modifier = Modifier, content:
             Box(
                 modifier = Modifier
                     .background(MenuBlack)
-                    .border(BorderStroke(2.dp, BustFlashRed))
-                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                    .border(BorderStroke(if (stampSize.value >= 12f) 2.dp else 1.dp, BustFlashRed))
+                    .padding(horizontal = (stampSize.value * 0.4f).dp, vertical = (stampSize.value * 0.13f).dp)
             ) {
                 Text(
                     text = "BUST",
                     color = Color.White,
                     fontWeight = FontWeight.Black,
-                    fontSize = 15.sp
+                    fontSize = stampSize
                 )
             }
         }

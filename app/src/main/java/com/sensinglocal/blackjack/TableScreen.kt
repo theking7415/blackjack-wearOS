@@ -226,14 +226,20 @@ private fun DealerBlock(state: TableState, controller: TableFlightController, si
             fontWeight = FontWeight.Bold,
             fontSize = 12.sp
         )
-        CardRow(
-            cards = state.dealerCards,
-            hiddenIndex = if (revealed) -1 else 1,
-            scale = SeatRing.DEALER_SCALE,
-            maxWidth = side * 0.4f,
-            rowKey = DEALER_ROW,
-            controller = controller
-        )
+        // The dealer has no hand status, so a bust (once it's visible) stands in for one.
+        HandStatusEffect(
+            status = if (showTotal && isBust(state.dealerCards)) HandStatus.BUST else HandStatus.PLAYING,
+            stampSize = 11.sp
+        ) {
+            CardRow(
+                cards = state.dealerCards,
+                hiddenIndex = if (revealed) -1 else 1,
+                scale = SeatRing.DEALER_SCALE,
+                maxWidth = side * 0.4f,
+                rowKey = DEALER_ROW,
+                controller = controller
+            )
+        }
     }
 }
 
@@ -271,9 +277,10 @@ private fun SeatView(
             Text(text = compactAmount(seat.stack), color = MenuGold, fontSize = infoSize)
         } else {
             // Labels describe only the cards that have landed, and results wait for the whole table.
-            val labels = seat.hands.mapIndexed { handIndex, hand ->
-                handLabel(shownHand(hand, seatRowKey(seatIndex, handIndex), controller), settled)
+            val shownHands = seat.hands.mapIndexed { handIndex, hand ->
+                shownHand(hand, seatRowKey(seatIndex, handIndex), controller)
             }
+            val labels = shownHands.map { handLabel(it, settled) }
             // After a split, which of the hands is being played right now (-1 if not applicable).
             val playingHand = if (isActive && seat.hands.size > 1) state.activeHandIndex else -1
             if (isFront) {
@@ -307,15 +314,24 @@ private fun SeatView(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier.alpha(if (dimmed) 0.45f else 1f)
                     ) {
-                        CardRow(
-                            cards = hand.cards,
-                            hiddenIndex = -1,
-                            scale = scale,
-                            maxWidth = handMax,
-                            rowKey = seatRowKey(seatIndex, handIndex),
-                            controller = controller,
-                            highlight = handIndex == playingHand
-                        )
+                        // Bust flash/shake/stamp and the stand pulse fire when the status the player can
+                        // see changes (shownHand holds it back until the cards have landed). Only your
+                        // own hands buzz; the stamp shrinks with the seat.
+                        HandStatusEffect(
+                            status = shownHands[handIndex].status,
+                            stampSize = (8f + 6f * closeness).sp,
+                            haptics = seat.kind == SeatKind.HUMAN
+                        ) {
+                            CardRow(
+                                cards = hand.cards,
+                                hiddenIndex = -1,
+                                scale = scale,
+                                maxWidth = handMax,
+                                rowKey = seatRowKey(seatIndex, handIndex),
+                                controller = controller,
+                                highlight = handIndex == playingHand
+                            )
+                        }
                         if (!isFront) {
                             Text(
                                 text = labels[handIndex].first,
